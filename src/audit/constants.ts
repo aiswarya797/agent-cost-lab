@@ -13,6 +13,21 @@ export const AUDIT_THRESHOLDS = {
 
 export const INSTRUCTION_FILE_NAMES = ["CLAUDE.md", "AGENTS.md"];
 
+export const INSTRUCTION_SCAN_EXCLUDE_DIRS = [
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  ".cache",
+  "coverage",
+  "target",
+  "vendor",
+  "tmp"
+];
+
 export const NOISY_PATH_HINTS = [
   "node_modules",
   "dist",

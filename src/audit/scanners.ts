@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   AUDIT_THRESHOLDS,
   INSTRUCTION_FILE_NAMES,
+  INSTRUCTION_SCAN_EXCLUDE_DIRS,
   NOISY_PATH_HINTS,
   NOISY_REFERENCE_PATH_HINTS
 } from "./constants.js";
@@ -66,7 +67,7 @@ async function collectInstructionFiles(projectPath) {
   const items = await readdir(projectPath, { withFileTypes: true });
 
   for (const item of items) {
-    if (item.name === ".git") {
+    if (INSTRUCTION_SCAN_EXCLUDE_DIRS.includes(item.name)) {
       continue;
     }
 
