@@ -12,6 +12,7 @@ export function scoreFindings(findings) {
   return {
     score: Math.max(0, maxScore - deductions),
     maxScore,
-    deductions
+    deductions,
+    nonDeductingSeverities: ["info"]
   };
 }
