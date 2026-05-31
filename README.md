@@ -24,4 +24,8 @@ node dist/cli.js audit --path tests/fixtures/sample-repo --json
 
 Text and JSON output are produced from the same findings array. The score is also derived from that same returned findings array.
 
+Displayed report paths are relative to the current working directory when possible. Paths used inside findings stay project-relative, such as `.env` or `package.json`.
+
+The score is a simple cost-hygiene signal, not a savings estimate. `high`, `medium`, and `low` findings reduce the score; `info` findings are shown for context and do not reduce the score.
+
 When `--path` is provided, the audit checks only the requested project path. Running without `--path` may also include clearly labeled user-home checks, such as detecting that `~/.claude/settings.json` exists. Home checks never print secrets or full configuration contents.

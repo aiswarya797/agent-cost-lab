@@ -7,6 +7,7 @@ export function formatText(report) {
     "Agent Cost Lab audit",
     `Path: ${report.path}`,
     `Score: ${report.score.score}/${report.score.maxScore}`,
+    "Score note: info findings do not reduce the score.",
     `Findings: ${report.findings.length}`,
     ""
   ];

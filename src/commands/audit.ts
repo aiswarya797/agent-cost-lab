@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { sortFindings } from "../core/findings.js";
 import { formatJson, formatText } from "../core/format.js";
+import { displayPathFor } from "../core/paths.js";
 import { scoreFindings } from "../core/scoring.js";
 import { scanHomeConfig, scanProject } from "../audit/scanners.js";
 
@@ -37,7 +38,7 @@ export function createAuditReport(result) {
 
   return {
     command: "audit",
-    path: result.projectPath,
+    path: result.displayPath ?? displayPathFor(result.projectPath),
     score: scoreFindings(findings),
     findings,
     checked: result.checked

@@ -7,9 +7,11 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { createAuditReport, runAudit } from "../dist/commands/audit.js";
 import { formatText } from "../dist/core/format.js";
+import { displayPathFor } from "../dist/core/paths.js";
 import { scoreFindings } from "../dist/core/scoring.js";
 
-const fixturePath = path.resolve("tests/fixtures/sample-repo");
+const fixtureDisplayPath = "tests/fixtures/sample-repo";
+const fixturePath = path.resolve(fixtureDisplayPath);
 const execFileAsync = promisify(execFile);
 
 test("score is derived from returned findings", async () => {
@@ -47,12 +49,54 @@ test("text and JSON modes agree on finding count for the same result", async () 
 });
 
 test("CLI text and JSON modes agree on fixture finding count", async () => {
-  const textRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixturePath]);
-  const jsonRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixturePath, "--json"]);
+  const textRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixtureDisplayPath]);
+  const jsonRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixtureDisplayPath, "--json"]);
   const json = JSON.parse(jsonRun.stdout);
   const textCount = Number(textRun.stdout.match(/^Findings: (\d+)$/m)?.[1]);
 
   assert.equal(textCount, json.findings.length);
+});
+
+test("fixture CLI output uses stable relative report paths", async () => {
+  const textRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixtureDisplayPath]);
+  const jsonRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixtureDisplayPath, "--json"]);
+  const json = JSON.parse(jsonRun.stdout);
+
+  assert.match(textRun.stdout, /^Path: tests\/fixtures\/sample-repo$/m);
+  assert.equal(json.path, fixtureDisplayPath);
+});
+
+test("fixture findings keep project-relative paths", async () => {
+  const jsonRun = await execFileAsync(process.execPath, ["dist/cli.js", "audit", "--path", fixtureDisplayPath, "--json"]);
+  const json = JSON.parse(jsonRun.stdout);
+  const findingPaths = json.findings.map((finding) => finding.path).filter(Boolean);
+
+  assert.ok(findingPaths.includes(".env"));
+  assert.ok(findingPaths.includes("package.json"));
+  assert.equal(findingPaths.some((findingPath) => path.isAbsolute(findingPath)), false);
+});
+
+test("display path falls back to absolute path outside cwd", () => {
+  const outsidePath = path.resolve("..", "outside-repo");
+
+  assert.equal(displayPathFor(outsidePath), outsidePath);
+});
+
+test("info findings are explicit zero-deduction score context", () => {
+  const score = scoreFindings([
+    {
+      id: "test.info",
+      title: "Informational finding",
+      severity: "info",
+      scope: "project",
+      detail: "Context only.",
+      recommendation: "No score action needed."
+    }
+  ]);
+
+  assert.equal(score.score, 100);
+  assert.equal(score.deductions, 0);
+  assert.deepEqual(score.nonDeductingSeverities, ["info"]);
 });
 
 test("fixture audit is independent of user-home Claude settings", async () => {
