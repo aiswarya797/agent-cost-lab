@@ -7,7 +7,9 @@ export function displayPathFor(absolutePath, cwd = process.cwd()) {
     return ".";
   }
 
-  if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+  const isOutsideCwd = relativePath === ".." || relativePath.startsWith(`..${path.sep}`);
+
+  if (!isOutsideCwd && !path.isAbsolute(relativePath)) {
     return relativePath;
   }
 

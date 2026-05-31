@@ -82,6 +82,13 @@ test("display path falls back to absolute path outside cwd", () => {
   assert.equal(displayPathFor(outsidePath), outsidePath);
 });
 
+test("display path keeps child names that start with parent-dir characters", () => {
+  const cwd = path.resolve("tests");
+  const insidePath = path.join(cwd, "..fixture");
+
+  assert.equal(displayPathFor(insidePath, cwd), "..fixture");
+});
+
 test("info findings are explicit zero-deduction score context", () => {
   const score = scoreFindings([
     {
