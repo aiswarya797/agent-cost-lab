@@ -1,0 +1,29 @@
+[
+  {
+    "session_id": "missing-ts-1",
+    "projectPath": "repo-missing-ts",
+    "model": "gpt-4o-mini",
+    "inputTokens": 900,
+    "outputTokens": 1200,
+    "cacheCreationTokens": 200,
+    "cacheReadTokens": 20
+  },
+  {
+    "session_id": "missing-ts-2",
+    "projectPath": "repo-missing-ts",
+    "model": "gpt-4o-mini",
+    "inputTokens": 860,
+    "outputTokens": 1100,
+    "cacheCreationTokens": 180,
+    "cacheReadTokens": 18
+  },
+  {
+    "session_id": "missing-ts-3",
+    "projectPath": "repo-missing-ts",
+    "model": "gpt-4o-mini",
+    "inputTokens": 940,
+    "outputTokens": 1250,
+    "cacheCreationTokens": 220,
+    "cacheReadTokens": 22
+  }
+]

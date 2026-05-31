@@ -1,0 +1,35 @@
+[
+  {
+    "session_id": "prefix-session",
+    "projectPath": "repo-prefix",
+    "model": "gpt-4o-mini",
+    "command": "git status",
+    "inputTokens": 40,
+    "outputTokens": 80,
+    "cacheCreationTokens": 8,
+    "cacheReadTokens": 1,
+    "timestamp": "2026-01-07T10:00:00.000Z"
+  },
+  {
+    "session_id": "prefix-session",
+    "projectPath": "repo-prefix",
+    "model": "gpt-4o-mini",
+    "command": "git pull",
+    "inputTokens": 42,
+    "outputTokens": 88,
+    "cacheCreationTokens": 9,
+    "cacheReadTokens": 0,
+    "timestamp": "2026-01-07T10:02:00.000Z"
+  },
+  {
+    "session_id": "prefix-session",
+    "projectPath": "repo-prefix",
+    "model": "gpt-4o-mini",
+    "command": "git log",
+    "inputTokens": 44,
+    "outputTokens": 85,
+    "cacheCreationTokens": 10,
+    "cacheReadTokens": 1,
+    "timestamp": "2026-01-07T10:04:00.000Z"
+  }
+]

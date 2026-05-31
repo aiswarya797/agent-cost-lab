@@ -1,0 +1,24 @@
+[
+  {
+    "session": "swapped-session-1",
+    "projectPath": "repo-swap",
+    "model": "gpt-4o-mini",
+    "startTime": "2026-01-06T10:10:00.000Z",
+    "endTime": "2026-01-06T10:00:00.000Z",
+    "inputTokens": 200,
+    "outputTokens": 120,
+    "cacheCreationTokens": 20,
+    "cacheReadTokens": 3
+  },
+  {
+    "session": "swapped-session-2",
+    "projectPath": "repo-swap",
+    "model": "gpt-4o-mini",
+    "startTime": "2026-01-06T11:10:00.000Z",
+    "endTime": "2026-01-06T10:45:00.000Z",
+    "inputTokens": 180,
+    "outputTokens": 90,
+    "cacheCreationTokens": 15,
+    "cacheReadTokens": 2
+  }
+]

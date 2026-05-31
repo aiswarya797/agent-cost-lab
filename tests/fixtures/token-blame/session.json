@@ -1,0 +1,37 @@
+{
+  "type": "session",
+  "data": [
+    {
+      "session": "session-long-1",
+      "projectPath": "repo-alpha",
+      "modelsUsed": ["gpt-4o"],
+      "modelBreakdowns": [
+        {
+          "model": "gpt-4o",
+          "inputTokens": 1400,
+          "outputTokens": 4200,
+          "cacheCreationTokens": 280,
+          "cacheReadTokens": 80,
+          "cost": 1.2
+        }
+      ],
+      "inputTokens": 1400,
+      "outputTokens": 4200,
+      "cacheCreationTokens": 280,
+      "cacheReadTokens": 80,
+      "totalCost": 1.2,
+      "startTime": "2026-01-01T10:00:00.000Z",
+      "endTime": "2026-01-01T12:45:00.000Z"
+    },
+    {
+      "session": "session-short-2",
+      "projectPath": "repo-beta",
+      "model": "gpt-4o-mini",
+      "inputTokens": 220,
+      "outputTokens": 320,
+      "cacheReadTokens": 40,
+      "cacheCreationTokens": 25,
+      "lastActivity": "2026-01-01T13:20:00.000Z"
+    }
+  ]
+}

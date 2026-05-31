@@ -1,0 +1,20 @@
+[
+  {
+    "session_id": "nocache-1",
+    "projectPath": "repo-no-cache",
+    "model": "gpt-4o-mini",
+    "inputTokens": 400,
+    "outputTokens": 1200,
+    "cacheReadTokens": 0,
+    "timestamp": "2026-01-08T09:00:00.000Z"
+  },
+  {
+    "session_id": "nocache-2",
+    "projectPath": "repo-no-cache",
+    "model": "gpt-4o-mini",
+    "input_tokens": 360,
+    "output_tokens": 900,
+    "cache_read_input_tokens": 0,
+    "timestamp": "2026-01-08T09:05:00.000Z"
+  }
+]

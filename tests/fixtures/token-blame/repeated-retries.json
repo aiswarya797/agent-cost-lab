@@ -1,0 +1,46 @@
+[
+  {
+    "session_id": "retry-session",
+    "projectPath": "repo-retry",
+    "model": "gpt-4o-mini",
+    "command": "run `git status` to confirm state",
+    "inputTokens": 35,
+    "outputTokens": 60,
+    "cacheCreationTokens": 8,
+    "cacheReadTokens": 2,
+    "timestamp": "2026-01-04T10:00:00.000Z"
+  },
+  {
+    "session_id": "retry-session",
+    "projectPath": "repo-retry",
+    "model": "gpt-4o-mini",
+    "command": "run `git status` to confirm state",
+    "inputTokens": 35,
+    "outputTokens": 62,
+    "cacheCreationTokens": 7,
+    "cacheReadTokens": 3,
+    "timestamp": "2026-01-04T10:04:00.000Z"
+  },
+  {
+    "session_id": "retry-session",
+    "projectPath": "repo-retry",
+    "model": "gpt-4o-mini",
+    "command": "run `git status` to confirm state",
+    "inputTokens": 34,
+    "outputTokens": 61,
+    "cacheCreationTokens": 7,
+    "cacheReadTokens": 1,
+    "timestamp": "2026-01-04T10:07:00.000Z"
+  },
+  {
+    "session_id": "retry-session",
+    "projectPath": "repo-retry",
+    "model": "gpt-4o-mini",
+    "command": "run `git status` to confirm state",
+    "inputTokens": 35,
+    "outputTokens": 58,
+    "cacheCreationTokens": 6,
+    "cacheReadTokens": 2,
+    "timestamp": "2026-01-04T10:09:00.000Z"
+  }
+]

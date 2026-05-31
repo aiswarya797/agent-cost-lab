@@ -1,0 +1,32 @@
+[
+  {
+    "session_id": "missing-ts-head-retry",
+    "projectPath": "repo-no-time",
+    "model": "gpt-4o-mini",
+    "command": "run tests now",
+    "inputTokens": 40,
+    "outputTokens": 90,
+    "cacheCreationTokens": 5,
+    "cacheReadTokens": 2
+  },
+  {
+    "session_id": "missing-ts-head-retry",
+    "projectPath": "repo-no-time",
+    "model": "gpt-4o-mini",
+    "command": "run tests later",
+    "inputTokens": 45,
+    "outputTokens": 88,
+    "cacheCreationTokens": 4,
+    "cacheReadTokens": 1
+  },
+  {
+    "session_id": "missing-ts-head-retry",
+    "projectPath": "repo-no-time",
+    "model": "gpt-4o-mini",
+    "command": "run tests quickly",
+    "inputTokens": 44,
+    "outputTokens": 92,
+    "cacheCreationTokens": 6,
+    "cacheReadTokens": 3
+  }
+]

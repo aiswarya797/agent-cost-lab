@@ -1,0 +1,37 @@
+{
+  "projects": {
+    "repo-alpha": [
+      {
+        "session_id": "proj-alpha-1",
+        "model": "gpt-4o-mini",
+        "input_tokens": 300,
+        "output_tokens": 500,
+        "cache_read_input_tokens": 25,
+        "cache_creation_input_tokens": 40,
+        "timestamp": "2026-01-02T09:00:00.000Z"
+      },
+      {
+        "session_id": "proj-alpha-2",
+        "model": "gpt-4o-mini",
+        "input_tokens": 210,
+        "output_tokens": 260,
+        "cache_read_input_tokens": 12,
+        "cache_creation_input_tokens": 14,
+        "timestamp": "2026-01-02T10:00:00.000Z"
+      }
+    ],
+    "repo-beta": [
+      {
+        "session_id": "proj-beta-1",
+        "model": "gpt-4o",
+        "usage": {
+          "input_tokens": 620,
+          "output_tokens": 1120,
+          "cache_read_input_tokens": 100,
+          "cache_creation_input_tokens": 140
+        },
+        "timestamp": "2026-01-02T11:00:00.000Z"
+      }
+    ]
+  }
+}
