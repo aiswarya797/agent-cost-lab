@@ -200,14 +200,14 @@ export function normalizeUsageEvent(event, context = {}) {
   }
 
   const sessionId = getFirstString(event, [
-    ["message", "session_id"],
-    ["message", "sessionId"],
-    ["message", "session"],
-    ["message", "id"],
     ["session_id"],
     ["sessionId"],
     ["session"],
-    ["id"]
+    ["id"],
+    ["message", "session_id"],
+    ["message", "sessionId"],
+    ["message", "session"],
+    ["message", "id"]
   ]) || `inferred-${context.index ?? 0}`;
   const projectPath = getFirstString(event, [["projectPath"], ["project_path"], ["project"], ["rootPath"]]) || context.projectPath || "unknown-project";
   const modelList = extractModels(event);

@@ -55,6 +55,15 @@ test("missing usage file path returns error", async () => {
   );
 });
 
+test("top-level session_id takes precedence over message.id", async () => {
+  const result = await runTokenBlame(["--input", fixture("claude-message-session-precedence.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.summary.totalEvents, 2);
+  assert.equal(report.sessions[0].sessionId, "real-session-123");
+});
+
 test("repeated retries sample includes repeated_retries driver", async () => {
   const result = await runTokenBlame(["--input", fixture("repeated-retries.json"), "--json"]);
   const report = JSON.parse(result.stdout);
