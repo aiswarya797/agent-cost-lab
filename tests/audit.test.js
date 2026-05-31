@@ -166,6 +166,22 @@ test("oversized instruction file check flags medium and high thresholds", async 
   assert.ok(ids.has("project.instruction-size.high"));
 });
 
+test("instruction discovery skips noisy generated directories", async () => {
+  const root = await mkdtemp(tmpPrefix);
+  await writeFixture(root, {
+    "dist/AGENTS.md": "line\n".repeat(220),
+    "CLAUDE.md": "Dist artifacts are noisy and should be avoided in agent context.\n",
+    ".gitignore": "dist/\n"
+  });
+
+  const result = await runAudit({
+    projectPath: root,
+    includeHomeChecks: false
+  });
+
+  const distFindings = result.findings.filter((finding) => finding.path === "dist/AGENTS.md" || finding.path === "./dist/AGENTS.md");
+  assert.equal(distFindings.length, 0);
+});
 test("duplicate and conflicting instruction detection works", async () => {
   const root = await mkdtemp(tmpPrefix);
   await writeFixture(root, {
