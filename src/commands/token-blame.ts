@@ -13,15 +13,39 @@ export async function runTokenBlameCommand(options) {
     summary: analysis.summary,
     drivers: analysis.drivers,
     healthySignals: analysis.healthySignals,
-    warnings: parsed.warnings ?? []
+    warnings: parsed.warnings ?? [],
+    verbose: options.verbose,
+    unknownSessionAttribution: analysis.attributionCounts
   });
 
   return options.json ? formatTokenBlameJson(report) : formatTokenBlameText(report);
 }
 
 export function createTokenBlameReport(result) {
+  const verbose = Boolean(result.verbose);
   const sortedDrivers = sortDrivers(result.drivers);
   const blameScore = clampNumber(sortedDrivers.reduce((total, driver) => total + driver.scoreContribution, 0), 0, 100);
+  const compactSessions = (result.sessions || []).map(compactSessionSummary);
+  const topSessions = [...compactSessions]
+    .sort((left, right) => (right.totalTokens || 0) - (left.totalTokens || 0))
+    .slice(0, 8)
+    .map((session) => ({
+      sessionId: session.sessionId,
+      projectPath: session.projectPath,
+      modelList: session.modelList,
+      totalTokens: session.totalTokens,
+      eventCount: session.eventCount,
+      durationMs: session.durationMs
+    }));
+
+  const unknownSessionAttribution = result.unknownSessionAttribution || { project: 0, model: 0 };
+  const warnings = [...(result.warnings || [])];
+  if (unknownSessionAttribution.project > 0) {
+    warnings.push(`unknownSessionAttribution.project=${unknownSessionAttribution.project}`);
+  }
+  if (unknownSessionAttribution.model > 0) {
+    warnings.push(`unknownSessionAttribution.model=${unknownSessionAttribution.model}`);
+  }
 
   return {
     command: "token-blame",
@@ -37,15 +61,40 @@ export function createTokenBlameReport(result) {
       ...result.summary,
       drivers: sortedDrivers.length
     },
-    sessions: result.sessions,
+    sessions: verbose ? result.sessions : compactSessions,
     drivers: sortedDrivers,
+    topSessions,
     healthySignals: result.healthySignals || [],
     recommendations: buildRecommendations(sortedDrivers),
+    unknownSessionAttribution,
     notes: [
       "This is a local parsing-only diagnostics report.",
       "No API calls or network uploads are performed."
     ],
-    warnings: result.warnings
+    warnings
+  };
+}
+
+function compactSessionSummary(session) {
+  return {
+    sessionId: session.sessionId,
+    projectPath: session.projectPath,
+    modelList: session.modelList,
+    inputTokens: session.inputTokens,
+    outputTokens: session.outputTokens,
+    cacheWriteTokens: session.cacheWriteTokens,
+    cacheReadTokens: session.cacheReadTokens,
+    totalCost: Number.isFinite(session.totalCost) ? session.totalCost : undefined,
+    totalTokens: session.totalTokens,
+    eventCount: session.eventCount,
+    startTimeMs: session.startTimeMs,
+    endTimeMs: session.endTimeMs,
+    startTime: session.startTime,
+    endTime: session.endTime,
+    durationMs: session.durationMs,
+    outputRatio: session.outputRatio,
+    cacheReadRatio: session.cacheReadRatio,
+    modelBreakdowns: session.modelBreakdowns
   };
 }
 

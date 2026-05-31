@@ -17,7 +17,8 @@ async function main(argv) {
   if (parsed.command === "token-blame") {
     const output = await runTokenBlameCommand({
       input: parsed.inputPath,
-      json: parsed.json
+      json: parsed.json,
+      verbose: parsed.verbose
     });
     process.stdout.write(output);
     return;
@@ -30,6 +31,7 @@ function parseArgs(argv) {
   const [command = "audit", ...args] = argv;
   let pathArg;
   let json = false;
+  let verbose = false;
   let inputPath;
 
   if (command === "audit") {
@@ -38,6 +40,11 @@ function parseArgs(argv) {
 
       if (arg === "--json") {
         json = true;
+        continue;
+      }
+
+      if (arg === "--verbose" || arg === "--json-full") {
+        verbose = true;
         continue;
       }
 
@@ -65,6 +72,11 @@ function parseArgs(argv) {
         continue;
       }
 
+      if (arg === "--verbose" || arg === "--json-full") {
+        verbose = true;
+        continue;
+      }
+
       if (arg === "--input") {
         const next = args[index + 1];
         if (!next) {
@@ -82,7 +94,7 @@ function parseArgs(argv) {
       throw new Error("--input is required for token-blame");
     }
 
-    return { command, inputPath, json };
+    return { command, inputPath, json, verbose };
   }
 
   throw new Error(`Unknown command: ${command}`);

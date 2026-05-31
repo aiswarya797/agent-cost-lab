@@ -1,0 +1,21 @@
+[
+  {
+    "session_id": "mixed-project-session",
+    "projectPath": "known-repo",
+    "model": "gpt-4o-mini",
+    "inputTokens": 100,
+    "outputTokens": 60,
+    "cacheCreationTokens": 15,
+    "cacheReadTokens": 2,
+    "timestamp": "2026-05-01T10:00:00.000Z"
+  },
+  {
+    "session_id": "mixed-project-session",
+    "model": "gpt-4o-mini",
+    "inputTokens": 80,
+    "outputTokens": 50,
+    "cache_creation_tokens": 12,
+    "cache_read_input_tokens": 3,
+    "timestamp": "2026-05-01T10:05:00.000Z"
+  }
+]

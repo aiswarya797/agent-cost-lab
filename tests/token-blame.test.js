@@ -36,12 +36,60 @@ test("project-grouped JSON is parsed as multiple projects", async () => {
   assert.equal(report.summary.totalSessions, 3);
 });
 
+test("mixed known and missing project within a session resolves to dominant project", async () => {
+  const result = await runTokenBlame(["--input", fixture("mixed-project-resolution.json"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.summary.totalEvents, 2);
+  assert.equal(report.sessions[0].projectPath, "known-repo");
+  assert.equal(report.unknownSessionAttribution.project, 0);
+});
+
+test("model resolves from provider/metadata shape when mixed with unknown", async () => {
+  const result = await runTokenBlame(["--input", fixture("provider-metadata-model-resolution.json"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.summary.totalEvents, 2);
+  assert.equal(report.sessions[0].modelList.includes("claude-3-haiku-20240307"), true);
+  assert.equal(report.unknownSessionAttribution.model, 0);
+});
+
+test("source transcript path fallback infers project id from projects/<project-id>.jsonl", async () => {
+  const result = await runTokenBlame(["--input", fixture("projects/source-fallback-project.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.sessions[0].projectPath, "source-fallback-project");
+  assert.equal(report.unknownSessionAttribution.project, 0);
+});
+
 test("JSONL raw usage file is parsed", async () => {
   const result = await runTokenBlame(["--input", fixture("raw-jsonl.log"), "--json"]);
   const report = JSON.parse(result.stdout);
 
   assert.equal(report.summary.totalSessions, 2);
   assert.equal(report.drivers.length >= 0, true);
+});
+
+test("compact JSON omits per-event blobs by default", async () => {
+  const result = await runTokenBlame(["--input", fixture("session.json"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  const hasEvents = report.sessions.some((session) => Array.isArray(session.events));
+  assert.equal(hasEvents, false);
+  assert.equal(Array.isArray(report.topSessions), true);
+  assert.ok(report.topSessions.length >= 1);
+});
+
+test("verbose JSON keeps per-event blobs", async () => {
+  const result = await runTokenBlame(["--input", fixture("session.json"), "--json", "--verbose"]);
+  const report = JSON.parse(result.stdout);
+
+  const hasEvents = report.sessions.some((session) => Array.isArray(session.events));
+  assert.equal(hasEvents, true);
+  assert.equal(report.sessions.some((session) => session.events.length > 0), true);
 });
 
 test("missing usage file path returns error", async () => {

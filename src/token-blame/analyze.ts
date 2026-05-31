@@ -23,7 +23,7 @@ const DRIVER_ORDER = [
 ];
 
 export function analyzeTokenUsage(parsed) {
-  const sessions = summarizeEventsToSessions(parsed.sessions || []);
+  const { sessions, attributionCounts } = summarizeEventsToSessions(parsed.sessions || []);
   const summary = buildSummary(parsed.sessions || [], sessions);
   const healthySignals = detectHealthyCacheSignals(sessions);
   const drivers = [
@@ -41,11 +41,17 @@ export function analyzeTokenUsage(parsed) {
     sessions,
     summary,
     drivers,
-    healthySignals
+    healthySignals,
+    attributionCounts
   };
 }
 
 function summarizeEventsToSessions(events) {
+  const attributionCounts = {
+    project: 0,
+    model: 0
+  };
+
   const sessionsById = new Map();
   for (const event of events) {
     if (!event || !event.sessionId) {
@@ -56,6 +62,8 @@ function summarizeEventsToSessions(events) {
       sessionId: event.sessionId,
       projectPath: event.projectPath || "unknown-project",
       modelList: [...new Set((event.modelList && event.modelList.length > 0 ? event.modelList : ["unknown-model"]))],
+      eventProjectValues: [],
+      eventModelValues: [],
       inputTokens: 0,
       outputTokens: 0,
       cacheWriteTokens: 0,
@@ -72,6 +80,15 @@ function summarizeEventsToSessions(events) {
     };
 
     session.eventCount += 1;
+    if (event.projectPath) {
+      session.eventProjectValues.push(event.projectPath);
+    }
+    if (Array.isArray(event.modelList)) {
+      for (const model of event.modelList) {
+        session.eventModelValues.push(model);
+      }
+    }
+
     session.events.push({
       time: event.startTimeMs,
       signature: event.raw?.commandSignature,
@@ -115,6 +132,20 @@ function summarizeEventsToSessions(events) {
   }
 
   const sessions = [...sessionsById.values()].map((session) => {
+    const resolvedProject = reconcileDominantValue(session.eventProjectValues, session.projectPath, "unknown-project");
+    if (resolvedProject === "unknown-project") {
+      attributionCounts.project += 1;
+    }
+    session.projectPath = resolvedProject;
+
+    const resolvedModels = resolveSessionModels(session.eventModelValues);
+    if (resolvedModels.length === 0 || (resolvedModels.length === 1 && resolvedModels[0] === "unknown-model")) {
+      attributionCounts.model += 1;
+      session.modelList = ["unknown-model"];
+    } else {
+      session.modelList = resolvedModels;
+    }
+
     if (session.startTimeMs !== undefined && session.endTimeMs !== undefined) {
       const durationMs = session.endTimeMs - session.startTimeMs;
       if (durationMs >= 0) {
@@ -138,7 +169,12 @@ function summarizeEventsToSessions(events) {
     session.endTime = session.endTimeMs === undefined ? null : new Date(session.endTimeMs).toISOString();
   }
 
-  return sessions;
+  for (const session of sessions) {
+    delete session.eventProjectValues;
+    delete session.eventModelValues;
+  }
+
+  return { sessions, attributionCounts };
 }
 
 function buildSummary(rawEvents, sessions) {
@@ -835,6 +871,56 @@ function timeDiffMs(current, previous) {
   const left = previous.startTimeMs ?? previous.endTimeMs ?? 0;
   const right = current.startTimeMs ?? current.endTimeMs ?? 0;
   return right - left;
+}
+
+function reconcileDominantValue(values, fallback, unknownValue) {
+  const resolution = resolveSessionValues(values, unknownValue);
+  return resolution.hasKnown ? resolution.dominant : fallback || unknownValue;
+}
+
+function resolveSessionModels(values) {
+  const resolution = resolveSessionValues(values, "unknown-model");
+  if (!resolution.hasKnown) {
+    return ["unknown-model"];
+  }
+
+  const ordered = [...resolution.values];
+  if (!ordered.includes(resolution.dominant)) {
+    ordered.unshift(resolution.dominant);
+  }
+
+  return ordered;
+}
+
+function resolveSessionValues(values, unknownValue) {
+  const counts = new Map();
+  let hasKnown = false;
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+  }
+    const normalized = value.trim();
+    if (!normalized || normalized === unknownValue) {
+      continue;
+    }
+    hasKnown = true;
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+
+  if (!hasKnown) {
+    return { hasKnown: false, dominant: unknownValue, values: [unknownValue] };
+  }
+
+  let dominant = undefined;
+  let topCount = -1;
+  for (const [value, count] of counts.entries()) {
+    if (count > topCount) {
+      dominant = value;
+      topCount = count;
+    }
+  }
+  const knownValues = [...counts.keys()].sort();
+  return { hasKnown: true, dominant, values: knownValues, topCount };
 }
 
 function hasNearDuplicateSignature(left, right) {

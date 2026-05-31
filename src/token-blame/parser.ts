@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 const TIMESTAMP_KEYS = [
   ["message", "timestamp"],
@@ -153,7 +154,11 @@ export function parseUsageText(rawText, options = {}) {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     try {
-      sessions.push(normalizeUsageEvent(JSON.parse(line), { index, fallbackSessionId }));
+      sessions.push(normalizeUsageEvent(JSON.parse(line), {
+        index,
+        fallbackSessionId,
+        source
+      }));
     } catch (error) {
       throw new Error(`Invalid JSONL at line ${index + 1} in ${source}: ${error.message}`);
     }
@@ -173,14 +178,22 @@ function parseStructuredUsage(data, source) {
 
   if (Array.isArray(data)) {
     for (let index = 0; index < data.length; index += 1) {
-      sessions.push(normalizeUsageEvent(data[index], { index, fallbackSessionId }));
+      sessions.push(normalizeUsageEvent(data[index], {
+        index,
+        fallbackSessionId,
+        source
+      }));
     }
     return { source, sessions, warnings };
   }
 
   if (Array.isArray(data.data) && data.type === "session") {
     for (let index = 0; index < data.data.length; index += 1) {
-      sessions.push(normalizeUsageEvent(data.data[index], { index, fallbackSessionId }));
+      sessions.push(normalizeUsageEvent(data.data[index], {
+        index,
+        fallbackSessionId,
+        source
+      }));
     }
     return { source, sessions, warnings };
   }
@@ -197,6 +210,7 @@ function parseStructuredUsage(data, source) {
         sessions.push(normalizeUsageEvent(entry, {
           index,
           projectPath,
+          source,
           fallbackSessionId: `${fallbackSessionId}:project-${projectPath}`
         }));
       }
@@ -204,7 +218,7 @@ function parseStructuredUsage(data, source) {
     return { source, sessions, warnings };
   }
 
-  sessions.push(normalizeUsageEvent(data, { index: 0, fallbackSessionId }));
+  sessions.push(normalizeUsageEvent(data, { index: 0, fallbackSessionId, source }));
   return { source, sessions, warnings };
 }
 
@@ -214,26 +228,44 @@ export function normalizeUsageEvent(event, context = {}) {
   }
 
   const sessionId = getFirstString(event, [
-    ["session_id"],
-    ["sessionId"],
-    ["session"],
     ["message", "session_id"],
     ["message", "sessionId"],
     ["message", "session"],
-    ["message", "id"]
+    ["message", "session", "id"],
+    ["message", "session", "sessionId"],
+    ["message", "id"],
+    ["session_id"],
+    ["sessionId"],
+    ["session"]
   ]) || context.fallbackSessionId || `inferred-${context.index ?? 0}`;
   const projectPath = getFirstString(event, [
-    ["projectPath"],
-    ["project_path"],
-    ["project"],
-    ["rootPath"],
+    ["message", "caller"],
+    ["message", "metadata", "project"],
+    ["message", "metadata", "workspace"],
     ["message", "projectPath"],
     ["message", "project"],
     ["message", "rootPath"],
     ["message", "cwd"],
     ["message", "workingDirectory"],
-    ["message", "workspace"]
-  ]) || context.projectPath || "unknown-project";
+    ["message", "path"],
+    ["message", "workspace"],
+    ["projectPath"],
+    ["project_path"],
+    ["project"],
+    ["rootPath"],
+    ["session", "projectPath"],
+    ["session", "project"]
+  ]) ||
+    getFirstStringFromMessageContext(event, "project") ||
+    getFirstStringFromMessageContext(event, "workspace") ||
+    getFirstStringFromMessageContext(event, "cwd") ||
+    getFirstStringFromMessageContext(event, "workingDirectory") ||
+    getFirstStringFromMessageContext(event, "path") ||
+    getFirstStringFromMessageContext(event, "projectPath") ||
+    getFirstStringFromMessageContext(event, "rootPath") ||
+    context.projectPath ||
+    deriveProjectPathFromSource(context.source) ||
+    "unknown-project";
   const modelList = extractModels(event);
   const startTimeMs = extractTimestamp(event, TIMESTAMP_KEYS);
   const endTimeMs = extractTimestamp(event, END_TIME_KEYS);
@@ -314,6 +346,44 @@ export function normalizeUsageEvent(event, context = {}) {
   };
 }
 
+function getFirstStringFromMessageContext(event, key) {
+  const contextItems = getByPath(event, ["message", "context"]);
+  if (!Array.isArray(contextItems)) {
+    return undefined;
+  }
+
+  for (const item of contextItems) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const direct = item[key];
+    if (typeof direct === "string" && direct.trim()) {
+      return direct.trim();
+    }
+
+    const nested = item.context;
+    if (nested && typeof nested === "object" && typeof nested[key] === "string" && nested[key].trim()) {
+      return nested[key].trim();
+    }
+  }
+
+  return undefined;
+}
+
+function deriveProjectPathFromSource(source) {
+  if (typeof source !== "string" || !source.endsWith(".jsonl")) {
+    return undefined;
+  }
+
+  const parts = source.split(path.sep);
+  if (!parts.includes("projects")) {
+    return undefined;
+  }
+
+  return path.parse(source).name;
+}
+
 function normalizeModelBreakdowns(event) {
   const values = getByPath(event, ["modelBreakdowns"]) ?? getByPath(event, ["model_breakdowns"]) ?? getByPath(event, ["message", "modelBreakdowns"]);
   if (!Array.isArray(values)) {
@@ -326,8 +396,11 @@ function normalizeModelBreakdowns(event) {
         return null;
       }
 
-  return {
-        model: getFirstString(entry, [["model"], ["name"], ["id"]]) || "unknown-model",
+      const normalizedModel = normalizeModelName(getFirstString(entry, [["model"], ["name"], ["id"]]));
+      const model = normalizedModel || "unknown-model";
+
+      return {
+        model,
         inputTokens: getFirstNumber(entry, [["inputTokens"], ["input_tokens"], ["input"]]) ?? 0,
         outputTokens: getFirstNumber(entry, [["outputTokens"], ["output_tokens"], ["output"]]) ?? 0,
         cacheWriteTokens: getFirstNumber(entry, [["cacheCreationTokens"], ["cache_creation_tokens"], ["cache_write_tokens"], ["cacheCreationInputTokens"]]) ?? 0,
@@ -339,34 +412,62 @@ function normalizeModelBreakdowns(event) {
 }
 
 function extractModels(event) {
-  const modelsUsed = getByPath(event, ["modelsUsed"]) ?? getByPath(event, ["message", "modelsUsed"]) ?? getByPath(event, ["message", "models"]);
   const models = [];
+  let messageModelFound = false;
+
+  const addModel = (value, source = "top") => {
+    const normalized = normalizeModelName(value);
+    if (!normalized) {
+      return;
+    }
+    if (!models.includes(normalized)) {
+      models.push(normalized);
+      if (source === "message") {
+        messageModelFound = true;
+      }
+    }
+  };
+
+  const modelsUsed =
+    getByPath(event, ["message", "modelsUsed"]) ??
+    getByPath(event, ["message", "models"]) ??
+    getByPath(event, ["modelsUsed"]) ??
+    getByPath(event, ["models"]);
 
   if (Array.isArray(modelsUsed)) {
     for (const item of modelsUsed) {
       if (typeof item === "string" && item.trim()) {
-        models.push(item.trim());
+        addModel(item, "message");
       }
     }
   }
 
-    const fallbackModel = getFirstString(event, [
-      ["message", "model"],
-      ["message", "modelName"],
-      ["message", "model", "id"],
-      ["message", "provider", "model"],
-      ["model"],
-      ["modelName"],
-    ["provider", "model"]
-  ]);
-  if (fallbackModel) {
-    models.push(fallbackModel);
-  }
+  addModel(getFirstString(event, [["message", "provider", "model"]]), "message");
+  addModel(getFirstString(event, [["message", "provider", "modelId"]]), "message");
+  addModel(getFirstString(event, [["message", "provider", "name"]]), "message");
+  addModel(getFirstString(event, [["message", "metadata", "model"]]), "message");
+  addModel(getFirstString(event, [["message", "metadata", "modelId"]]), "message");
+  addModel(getFirstString(event, [["message", "request", "model"]]), "message");
+  addModel(getFirstString(event, [["message", "params", "model"]]), "message");
+  addModel(getFirstString(event, [["message", "model_name"]]), "message");
+  addModel(getFirstString(event, [["message", "model"]]), "message");
+  addModel(getFirstString(event, [["message", "modelName"]]), "message");
+  addModel(getFirstString(event, [["message", "model", "id"]]), "message");
 
+  if (!messageModelFound) {
+    addModel(getFirstString(event, [["provider", "model"]]), "top");
+    addModel(getFirstString(event, [["provider", "modelId"]]), "top");
+    addModel(getFirstString(event, [["provider", "name"]]), "top");
+    addModel(getFirstString(event, [["metadata", "model"]]), "top");
+    addModel(getFirstString(event, [["metadata", "modelId"]]), "top");
+    addModel(getFirstString(event, [["request", "model"]]), "top");
+    addModel(getFirstString(event, [["params", "model"]]), "top");
+    addModel(getFirstString(event, [["model_name"]]), "top");
+    addModel(getFirstString(event, [["model"]]), "top");
+    addModel(getFirstString(event, [["modelName"]]), "top");
+  }
   for (const breakdown of normalizeModelBreakdowns(event)) {
-    if (breakdown.model && !models.includes(breakdown.model)) {
-      models.push(breakdown.model);
-    }
+    addModel(breakdown.model);
   }
 
   if (models.length === 0) {
@@ -374,6 +475,38 @@ function extractModels(event) {
   }
 
   return [...new Set(models)];
+}
+
+function normalizeModelName(value) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  let normalized = value.trim().toLowerCase().replace(/["'`]/g, "");
+  if (!normalized) {
+    return undefined;
+  }
+
+  const providerPrefix = normalized.match(/^([^/]+)\/(.+)$/);
+  if (providerPrefix && looksLikeProviderPrefix(providerPrefix[1])) {
+    normalized = providerPrefix[2];
+  }
+
+  if (normalized.includes("@")) {
+    normalized = normalized.replace(/@[^@]+$/g, "");
+  }
+
+  const hasVersionTag = normalized.match(/^(.*):([^:]+)$/);
+  if (hasVersionTag && !/^[0-9]/.test(hasVersionTag[2])) {
+    normalized = hasVersionTag[1];
+  }
+
+  normalized = normalized.replace(/\(.*\)$/g, "");
+  return normalized.trim() || undefined;
+}
+
+function looksLikeProviderPrefix(value) {
+  return ["openai", "anthropic", "google", "azure", "bedrock", "aws", "meta", "cohere", "groq"].includes(value);
 }
 
 function firstDefinedNumber(...values) {
