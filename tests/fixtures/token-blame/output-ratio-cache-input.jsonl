@@ -1,0 +1,5 @@
+{"session":"ratio-base-1","projectPath":"repo-ratio","message":{"model":"gpt-4o-mini","prompt":"ratio-base-1","usage":{"input_tokens":150,"output_tokens":15,"cache_read_input_tokens":0}},"timestamp":"2026-02-05T10:00:00.000Z"}
+{"session":"ratio-base-2","projectPath":"repo-ratio","message":{"model":"gpt-4o-mini","prompt":"ratio-base-2","usage":{"input_tokens":120,"output_tokens":20,"cache_read_input_tokens":10}},"timestamp":"2026-02-05T10:10:00.000Z"}
+{"session":"ratio-base-3","projectPath":"repo-ratio","message":{"model":"gpt-4o-mini","prompt":"ratio-base-3","usage":{"input_tokens":100,"output_tokens":25,"cache_read_input_tokens":5}},"timestamp":"2026-02-05T10:20:00.000Z"}
+{"session":"ratio-base-4","projectPath":"repo-ratio","model":"gpt-4o-mini","prompt":"ratio-base-4","usage":{"input_tokens":200,"output_tokens":30,"cache_read_input_tokens":0},"timestamp":"2026-02-05T10:30:00.000Z"}
+{"session":"ratio-cache-heavy","projectPath":"repo-ratio","message":{"model":"gpt-4o-mini","prompt":"ratio-cache-heavy","usage":{"input_tokens":100,"output_tokens":1000,"cache_read_input_tokens":5500}},"timestamp":"2026-02-05T10:40:00.000Z"}

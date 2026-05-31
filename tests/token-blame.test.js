@@ -64,6 +64,43 @@ test("top-level session_id takes precedence over message.id", async () => {
   assert.equal(report.sessions[0].sessionId, "real-session-123");
 });
 
+test("message.session groups repeated ids even with unique top-level ids", async () => {
+  const result = await runTokenBlame(["--input", fixture("message-session-id-in-message.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.summary.totalEvents, 2);
+  assert.equal(report.sessions[0].sessionId, "shared-message-session");
+});
+
+test("message.context tool tokens are summed into toolResultTokens", async () => {
+  const result = await runTokenBlame(["--input", fixture("message-context-toolresult.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalToolResultTokens, 60);
+  assert.equal(report.sessions[0].toolResultTokens, 60);
+});
+
+test("message-model and model.id are included in session model breakdowns", async () => {
+  const result = await runTokenBlame(["--input", fixture("message-model-attribution.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.summary.totalEvents, 2);
+  assert.equal(report.sessions[0].modelList.includes("claude-3-haiku-20240307"), true);
+  assert.equal(report.sessions[0].modelList.includes("gpt-4o-mini"), true);
+  assert.equal(report.sessions[0].modelBreakdowns.some((item) => item.model === "claude-3-haiku-20240307"), true);
+  assert.equal(report.sessions[0].modelBreakdowns.some((item) => item.model === "gpt-4o-mini"), true);
+});
+
+test("message-scoped project fields are used when top-level project is missing", async () => {
+  const result = await runTokenBlame(["--input", fixture("message-project-attribution.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 1);
+  assert.equal(report.sessions[0].projectPath, "repo-from-message");
+});
+
 test("repeated retries sample includes repeated_retries driver", async () => {
   const result = await runTokenBlame(["--input", fixture("repeated-retries.json"), "--json"]);
   const report = JSON.parse(result.stdout);
@@ -125,6 +162,43 @@ test("missing timestamps and same head command tokens do not trigger repeated_re
   const report = JSON.parse(result.stdout);
 
   assert.equal(report.drivers.some((driver) => driver.id === "token-blame.repeated-retries"), false);
+});
+
+test("long-session is timestamp-only and does not classify by missing duration", async () => {
+  const result = await runTokenBlame(["--input", fixture("long-session-no-duration-no-timestamps.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.drivers.some((driver) => driver.id === "token-blame.long-sessions"), false);
+});
+
+test("cache-aware output ratio uses cache input and avoids old false positives", async () => {
+  const result = await runTokenBlame(["--input", fixture("output-ratio-cache-input.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.drivers.some((driver) => driver.id === "token-blame.high-output-ratio"), false);
+});
+
+test("cache health signal appears for stable cache reuse patterns", async () => {
+  const result = await runTokenBlame(["--input", fixture("cache-health-positive.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(Array.isArray(report.healthySignals), true);
+  assert.equal(report.healthySignals.length > 0, true);
+  assert.equal(report.healthySignals.every((signal) => signal.isPositive === true), true);
+});
+
+test("same drivers at different scale yield different blame scores", async () => {
+  const smallResult = await runTokenBlame(["--input", fixture("scale-small-output-retries.jsonl"), "--json"]);
+  const largeResult = await runTokenBlame(["--input", fixture("scale-large-output-retries.jsonl"), "--json"]);
+  const smallReport = JSON.parse(smallResult.stdout);
+  const largeReport = JSON.parse(largeResult.stdout);
+
+  const smallDrivers = new Set(smallReport.drivers.map((driver) => driver.id)).values();
+  const largeDrivers = new Set(largeReport.drivers.map((driver) => driver.id)).values();
+  assert.deepEqual([...smallDrivers].sort(), [...largeDrivers].sort());
+  assert.equal(smallReport.drivers.some((driver) => driver.id === "token-blame.repeated-retries"), true);
+  assert.equal(smallReport.drivers.some((driver) => driver.id === "token-blame.high-output-ratio"), true);
+  assert.notEqual(smallReport.score.score, largeReport.score.score);
 });
 
 test("text and JSON modes report same number of drivers", async () => {

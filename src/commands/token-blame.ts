@@ -12,6 +12,7 @@ export async function runTokenBlameCommand(options) {
     sessions: analysis.sessions,
     summary: analysis.summary,
     drivers: analysis.drivers,
+    healthySignals: analysis.healthySignals,
     warnings: parsed.warnings ?? []
   });
 
@@ -38,6 +39,7 @@ export function createTokenBlameReport(result) {
     },
     sessions: result.sessions,
     drivers: sortedDrivers,
+    healthySignals: result.healthySignals || [],
     recommendations: buildRecommendations(sortedDrivers),
     notes: [
       "This is a local parsing-only diagnostics report.",

@@ -100,6 +100,14 @@ const NUMBER_PATHS = {
   ]
 };
 
+const TOOL_RESULT_CONTEXT_PATHS = [
+  ["tool_output_tokens"],
+  ["toolResultTokens"],
+  ["tool_result_tokens"],
+  ["toolCall", "outputTokens"],
+  ["result_tokens"]
+];
+
 export async function parseUsageFile(filePath) {
   let rawText;
   try {
@@ -116,6 +124,7 @@ export async function parseUsageFile(filePath) {
 
 export function parseUsageText(rawText, options = {}) {
   const source = options.source || "input";
+  const fallbackSessionId = `inferred-${source}`;
   const trimmed = rawText.trim();
   if (!trimmed) {
     throw new Error(`Usage file is empty: ${source}`);
@@ -144,7 +153,7 @@ export function parseUsageText(rawText, options = {}) {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     try {
-      sessions.push(normalizeUsageEvent(JSON.parse(line), { index }));
+      sessions.push(normalizeUsageEvent(JSON.parse(line), { index, fallbackSessionId }));
     } catch (error) {
       throw new Error(`Invalid JSONL at line ${index + 1} in ${source}: ${error.message}`);
     }
@@ -156,6 +165,7 @@ export function parseUsageText(rawText, options = {}) {
 function parseStructuredUsage(data, source) {
   const sessions = [];
   const warnings = [];
+  const fallbackSessionId = `inferred-${source}`;
 
   if (!data || typeof data !== "object") {
     throw new Error(`Unsupported usage JSON shape in ${source}: expected object or array`);
@@ -163,14 +173,14 @@ function parseStructuredUsage(data, source) {
 
   if (Array.isArray(data)) {
     for (let index = 0; index < data.length; index += 1) {
-      sessions.push(normalizeUsageEvent(data[index], { index }));
+      sessions.push(normalizeUsageEvent(data[index], { index, fallbackSessionId }));
     }
     return { source, sessions, warnings };
   }
 
   if (Array.isArray(data.data) && data.type === "session") {
     for (let index = 0; index < data.data.length; index += 1) {
-      sessions.push(normalizeUsageEvent(data.data[index], { index }));
+      sessions.push(normalizeUsageEvent(data.data[index], { index, fallbackSessionId }));
     }
     return { source, sessions, warnings };
   }
@@ -184,13 +194,17 @@ function parseStructuredUsage(data, source) {
 
       for (let index = 0; index < projectEntries.length; index += 1) {
         const entry = projectEntries[index];
-        sessions.push(normalizeUsageEvent(entry, { index, projectPath }));
+        sessions.push(normalizeUsageEvent(entry, {
+          index,
+          projectPath,
+          fallbackSessionId: `${fallbackSessionId}:project-${projectPath}`
+        }));
       }
     }
     return { source, sessions, warnings };
   }
 
-  sessions.push(normalizeUsageEvent(data, { index: 0 }));
+  sessions.push(normalizeUsageEvent(data, { index: 0, fallbackSessionId }));
   return { source, sessions, warnings };
 }
 
@@ -203,13 +217,23 @@ export function normalizeUsageEvent(event, context = {}) {
     ["session_id"],
     ["sessionId"],
     ["session"],
-    ["id"],
     ["message", "session_id"],
     ["message", "sessionId"],
     ["message", "session"],
     ["message", "id"]
-  ]) || `inferred-${context.index ?? 0}`;
-  const projectPath = getFirstString(event, [["projectPath"], ["project_path"], ["project"], ["rootPath"]]) || context.projectPath || "unknown-project";
+  ]) || context.fallbackSessionId || `inferred-${context.index ?? 0}`;
+  const projectPath = getFirstString(event, [
+    ["projectPath"],
+    ["project_path"],
+    ["project"],
+    ["rootPath"],
+    ["message", "projectPath"],
+    ["message", "project"],
+    ["message", "rootPath"],
+    ["message", "cwd"],
+    ["message", "workingDirectory"],
+    ["message", "workspace"]
+  ]) || context.projectPath || "unknown-project";
   const modelList = extractModels(event);
   const startTimeMs = extractTimestamp(event, TIMESTAMP_KEYS);
   const endTimeMs = extractTimestamp(event, END_TIME_KEYS);
@@ -220,7 +244,9 @@ export function normalizeUsageEvent(event, context = {}) {
   const cacheWriteTokens = getFirstNumber(event, NUMBER_PATHS.cacheWriteTokens) ?? 0;
   const cacheReadTokens = getFirstNumber(event, NUMBER_PATHS.cacheReadTokens) ?? 0;
   const totalCost = getFirstNumber(event, NUMBER_PATHS.totalCost);
-  const toolResultTokens = getFirstNumber(event, NUMBER_PATHS.toolResultTokens) ?? 0;
+  const directToolResultTokens = sumByPathCandidates(event, NUMBER_PATHS.toolResultTokens);
+  const contextToolResultTokens = extractToolResultTokensFromMessageContext(event);
+  const toolResultTokens = directToolResultTokens + contextToolResultTokens;
   const explicitTotal = getFirstNumber(event, NUMBER_PATHS.totalTokens);
   const totalTokens = explicitTotal ?? (inputTokens + outputTokens + cacheWriteTokens + cacheReadTokens);
   const modelBreakdowns = normalizeModelBreakdowns(event);
@@ -289,7 +315,7 @@ export function normalizeUsageEvent(event, context = {}) {
 }
 
 function normalizeModelBreakdowns(event) {
-  const values = getByPath(event, ["modelBreakdowns"]) ?? getByPath(event, ["model_breakdowns"]);
+  const values = getByPath(event, ["modelBreakdowns"]) ?? getByPath(event, ["model_breakdowns"]) ?? getByPath(event, ["message", "modelBreakdowns"]);
   if (!Array.isArray(values)) {
     return [];
   }
@@ -300,7 +326,7 @@ function normalizeModelBreakdowns(event) {
         return null;
       }
 
-      return {
+  return {
         model: getFirstString(entry, [["model"], ["name"], ["id"]]) || "unknown-model",
         inputTokens: getFirstNumber(entry, [["inputTokens"], ["input_tokens"], ["input"]]) ?? 0,
         outputTokens: getFirstNumber(entry, [["outputTokens"], ["output_tokens"], ["output"]]) ?? 0,
@@ -324,12 +350,13 @@ function extractModels(event) {
     }
   }
 
-  const fallbackModel = getFirstString(event, [
-    ["message", "model"],
-    ["message", "modelName"],
-    ["message", "provider", "model"],
-    ["model"],
-    ["modelName"],
+    const fallbackModel = getFirstString(event, [
+      ["message", "model"],
+      ["message", "modelName"],
+      ["message", "model", "id"],
+      ["message", "provider", "model"],
+      ["model"],
+      ["modelName"],
     ["provider", "model"]
   ]);
   if (fallbackModel) {
@@ -356,6 +383,33 @@ function firstDefinedNumber(...values) {
     }
   }
   return undefined;
+}
+
+function extractToolResultTokensFromMessageContext(event) {
+  const contextItems = getByPath(event, ["message", "context"]);
+  if (!Array.isArray(contextItems)) {
+    return 0;
+  }
+
+  let total = 0;
+  for (const item of contextItems) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const contextValue = item.context;
+    if (!contextValue || typeof contextValue !== "object") {
+      continue;
+    }
+
+    for (const path of TOOL_RESULT_CONTEXT_PATHS) {
+      const value = coerceFiniteNumber(getByPath(contextValue, path));
+      if (Number.isFinite(value)) {
+        total += value;
+      }
+    }
+  }
+
+  return total;
 }
 
 function extractTimestamp(event, candidates) {
@@ -389,6 +443,17 @@ function coerceTimestamp(value) {
   }
   }
   return undefined;
+}
+
+function sumByPathCandidates(source, candidates) {
+  let total = 0;
+  for (const path of candidates) {
+    const value = coerceFiniteNumber(getByPath(source, path));
+    if (Number.isFinite(value)) {
+      total += value;
+    }
+  }
+  return total;
 }
 
 function normalizeSignature(input) {

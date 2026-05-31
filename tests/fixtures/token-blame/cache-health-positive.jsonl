@@ -1,0 +1,2 @@
+{"projectPath":"repo-cache-health","message":{"session":"cache-health-1","model":"gpt-4o-mini","prompt":"healthy 1","usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":20,"cache_read_input_tokens":80}},"timestamp":"2026-02-06T08:00:00.000Z"}
+{"projectPath":"repo-cache-health","message":{"session":"cache-health-2","model":"gpt-4o-mini","prompt":"healthy 2","usage":{"input_tokens":120,"output_tokens":24,"cache_creation_input_tokens":15,"cache_read_input_tokens":90}},"timestamp":"2026-02-06T08:20:00.000Z"}

@@ -1,0 +1,2 @@
+{"projectPath":"repo-model","message":{"session":"model-attribution-session","model":{"id":"claude-3-haiku-20240307"},"prompt":"first model","usage":{"input_tokens":100,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":10},"timestamp":"2026-02-03T11:00:00.000Z"}
+{"projectPath":"repo-model","message":{"session":"model-attribution-session","model":"gpt-4o-mini","prompt":"second model","usage":{"input_tokens":80,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":5},"timestamp":"2026-02-03T11:10:00.000Z"}

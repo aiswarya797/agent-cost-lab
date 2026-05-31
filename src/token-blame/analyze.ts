@@ -25,6 +25,7 @@ const DRIVER_ORDER = [
 export function analyzeTokenUsage(parsed) {
   const sessions = summarizeEventsToSessions(parsed.sessions || []);
   const summary = buildSummary(parsed.sessions || [], sessions);
+  const healthySignals = detectHealthyCacheSignals(sessions);
   const drivers = [
     ...detectLongSessions(sessions),
     ...detectRepeatedRetries(parsed.sessions || []),
@@ -39,7 +40,8 @@ export function analyzeTokenUsage(parsed) {
   return {
     sessions,
     summary,
-    drivers
+    drivers,
+    healthySignals
   };
 }
 
@@ -120,7 +122,9 @@ function summarizeEventsToSessions(events) {
       }
     }
     session.modelList = [...new Set(session.modelList)].sort();
-    session.outputRatio = session.inputTokens > 0 ? session.outputTokens / session.inputTokens : null;
+    const outputBase = session.inputTokens + session.cacheReadTokens + session.cacheWriteTokens;
+    session.effectiveInputTokens = outputBase;
+    session.outputRatio = outputBase > 0 ? session.outputTokens / outputBase : null;
     session.cacheReadRatio = session.inputTokens + session.cacheWriteTokens + session.cacheReadTokens > 0
       ? session.cacheReadTokens / (session.inputTokens + session.cacheWriteTokens + session.cacheReadTokens)
       : null;
@@ -150,20 +154,22 @@ function buildSummary(rawEvents, sessions) {
 }
 
 function detectLongSessions(sessions) {
-  const withDurations = sessions.filter((session) => Number.isFinite(session.durationMs));
-  const tokenP95 = quantile(sessions.map((session) => session.totalTokens).filter((value) => value > 0), 0.95);
+  const withDurations = sessions.filter((session) => Number.isFinite(session.durationMs) && session.durationMs >= LONG_SESSION_DURATION_MS);
 
-  const affected = [];
-  for (const session of sessions) {
-    if (Number.isFinite(session.durationMs) && session.durationMs >= LONG_SESSION_DURATION_MS) {
-      affected.push(session.sessionId);
-      continue;
-    }
-
-    if (!Number.isFinite(session.durationMs) && tokenP95 > 0 && session.totalTokens > tokenP95) {
-      affected.push(session.sessionId);
-    }
+  if (withDurations.length === 0) {
+    return [];
   }
+
+  const maxDurationRatio = withDurations.reduce((maxValue, session) => Math.max(maxValue, (session.durationMs / LONG_SESSION_DURATION_MS)), 1);
+  const affected = withDurations.map((session) => session.sessionId);
+  const scoreContribution = scoreForDriver({
+    baseScore: 18,
+    affectedCount: affected.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: maxDurationRatio - 1,
+    affectedTokens: withDurations.reduce((total, session) => total + session.totalTokens, 0),
+    totalTokens: sessions.reduce((total, session) => total + session.totalTokens, 0)
+  });
 
   if (affected.length === 0) {
     return [];
@@ -174,11 +180,11 @@ function detectLongSessions(sessions) {
       id: "token-blame.long-sessions",
       title: "Long or oversized sessions",
       severity: pickSeverity(affected.length, 12),
-      scoreContribution: 18,
+      scoreContribution,
       sampleSize: affected.length,
       affectedSessions: [...new Set(affected)].slice(0, 8),
       confidence: clamp(0.3 + affected.length / 20, 0, 0.95),
-      why: `${affected.length} session(s) lasted longer than 120m or were large token outliers without duration data.`,
+      why: `${affected.length} session(s) lasted 120m or longer.`,
       likelyFix: "Batch work into cleaner checkpoints and reset context between long stretches.",
       evidenceSummary: `Top sessions: ${affected.slice(0, 4).join(", ")}`
     }
@@ -205,7 +211,8 @@ function detectRepeatedRetries(events) {
     if (projectMatch && Number.isFinite(gap) && gap <= RETRY_GAP_MS && duplicateCommand) {
       repeated.push({
         current,
-        previous
+        previous,
+        gap
       });
     }
   }
@@ -223,18 +230,32 @@ function detectRepeatedRetries(events) {
     bySession.set(sessionId, sessions);
   }
 
-  const affected = [...bySession.entries()].filter(([, matches]) => uniqueSessions(matches).length >= 2);
+  const affected = [...bySession.entries()].filter(([, matches]) => matches.length >= 2);
   if (affected.length === 0) {
     return [];
   }
 
   const affectedSessions = affected.map(([sessionId]) => sessionId);
+  const repeatedCount = repeated.length;
+  const totalGap = repeated.reduce((sum, match) => sum + Math.max(0, match.gap), 0);
+  const avgGap = repeatedCount > 0 ? totalGap / repeatedCount : RETRY_GAP_MS;
+  const distance = clamp((RETRY_GAP_MS - avgGap) / RETRY_GAP_MS, 0, 1);
+  const affectedTokenShare = affected.reduce((sum, [sessionId]) => sum + sessionTokenTotal(sessions, sessionId), 0);
+  const scoreContribution = scoreForDriver({
+    baseScore: 20,
+    affectedCount: affectedSessions.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: distance,
+    affectedTokens: affectedTokenShare,
+    totalTokens: sessions.reduce((sum, session) => sum + session.totalTokens, 0)
+  });
+
   return [
     {
       id: "token-blame.repeated-retries",
       title: "Likely repeated retries",
       severity: "medium",
-      scoreContribution: 20,
+      scoreContribution,
       sampleSize: affected.length,
       affectedSessions,
       confidence: 0.8,
@@ -247,6 +268,7 @@ function detectRepeatedRetries(events) {
 
 function detectExpensiveModelChoice(sessions) {
   const affected = [];
+  const details = [];
 
   for (const session of sessions) {
     const modelCost = {};
@@ -270,6 +292,11 @@ function detectExpensiveModelChoice(sessions) {
 
     if (ratio >= 0.7 && !LOW_TIER_MODELS.has(winnerModel.toLowerCase())) {
       affected.push(session.sessionId);
+      details.push({
+        sessionId: session.sessionId,
+        ratio,
+        contribution: winnerValue
+      });
     }
   }
 
@@ -277,12 +304,22 @@ function detectExpensiveModelChoice(sessions) {
     return [];
   }
 
+  const maxRatio = details.reduce((maxValue, detail) => Math.max(maxValue, detail.ratio), 0);
+  const scoreContribution = scoreForDriver({
+    baseScore: 16,
+    affectedCount: affected.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: maxRatio - 0.7,
+    affectedTokens: details.reduce((sum, detail) => sum + detail.contribution, 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
+  });
+
   return [
     {
       id: "token-blame.expensive-model-choice",
       title: "Dominant expensive model usage",
       severity: "high",
-      scoreContribution: 16,
+      scoreContribution,
       sampleSize: affected.length,
       affectedSessions: affected,
       confidence: 0.88,
@@ -305,6 +342,7 @@ function detectHighOutputRatio(sessions) {
   }
 
   const affected = [];
+  const details = [];
   for (const [projectPath, sessionsForProject] of byProject.entries()) {
     const ratios = sessionsForProject.map((session) => session.outputRatio).filter((ratio) => ratio !== null && Number.isFinite(ratio)).sort((a, b) => a - b);
     if (ratios.length === 0) {
@@ -316,6 +354,13 @@ function detectHighOutputRatio(sessions) {
       const ratio = session.outputRatio;
       if (ratio > 0 && (ratio >= project95 || ratio >= projectMedian * 3)) {
         affected.push(session.sessionId);
+        details.push({
+          sessionId: session.sessionId,
+          ratio,
+          outputTokens: session.outputTokens,
+          threshold: Math.max(project95, projectMedian * 3),
+          projectPath
+        });
       }
     }
   }
@@ -325,12 +370,25 @@ function detectHighOutputRatio(sessions) {
   }
 
   const unique = [...new Set(affected)];
+  const maxDistance = Math.max(
+    ...details.map((detail) => detail.ratio / Math.max(0.0001, detail.threshold) - 1),
+    0
+  );
+  const scoreContribution = scoreForDriver({
+    baseScore: unique.length > 3 ? 14 : 9,
+    affectedCount: unique.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: maxDistance,
+    affectedTokens: details.reduce((sum, detail) => sum + detail.outputTokens, 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.outputTokens || 0), 0)
+  });
+
   return [
     {
       id: "token-blame.high-output-ratio",
       title: "Output-heavy interaction pattern",
       severity: unique.length > 3 ? "high" : "medium",
-      scoreContribution: unique.length > 3 ? 14 : 9,
+      scoreContribution,
       sampleSize: unique.length,
       affectedSessions: unique,
       confidence: 0.75,
@@ -368,14 +426,24 @@ function detectCacheMiss(sessions) {
     return [];
   }
 
+  const affectedIds = affected.map((session) => session.sessionId);
+  const scoreContribution = scoreForDriver({
+    baseScore: 12,
+    affectedCount: affected.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: projectMedian > 0 ? (projectMedian - Math.min(...affected.map((session) => session.cacheReadRatio || projectMedian))) / Math.max(0.001, projectMedian) : 0,
+    affectedTokens: affected.reduce((sum, session) => sum + session.cacheWriteTokens + session.cacheReadTokens, 0),
+    totalTokens: sessions.reduce((sum, session) => sum + session.totalTokens, 0)
+  });
+
   return [
     {
       id: "token-blame.cache-miss",
       title: "Likely cache-miss pattern",
       severity: "medium",
-      scoreContribution: 12,
+      scoreContribution,
       sampleSize: affected.length,
-      affectedSessions: affected.map((session) => session.sessionId),
+      affectedSessions: affectedIds,
       confidence: 0.67,
       why: "Session cache-read shares are much lower than project baseline while cache writes stay non-trivial.",
       likelyFix: "Stabilize prompt structure and repeated sections to increase cache reuse.",
@@ -417,12 +485,24 @@ function detectCacheWritePressure(sessions) {
   }
 
   const unique = [...new Set(affected)];
+  const scoreContribution = scoreForDriver({
+    baseScore: 10,
+    affectedCount: unique.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: 0.4,
+    affectedTokens: affected.reduce((sum, sessionId) => {
+      const match = sessions.find((session) => session.sessionId === sessionId);
+      return sum + (match ? match.cacheWriteTokens : 0);
+    }, 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.cacheWriteTokens + session.cacheReadTokens), 0)
+  });
+
   return [
     {
       id: "token-blame.cache-write-pressure",
       title: "Sustained cache-write pressure",
       severity: "low",
-      scoreContribution: 10,
+      scoreContribution,
       sampleSize: unique.length,
       affectedSessions: unique,
       confidence: 0.6,
@@ -465,12 +545,24 @@ function detectToolResultBloat(sessions) {
   }
 
   const unique = [...new Set(affected)];
+  const scoreContribution = scoreForDriver({
+    baseScore: 12,
+    affectedCount: unique.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: 1.5,
+    affectedTokens: affected.reduce((sum, sessionId) => {
+      const match = sessions.find((session) => session.sessionId === sessionId);
+      return sum + (match ? match.toolResultTokens : 0);
+    }, 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.toolResultTokens || 0), 0)
+  });
+
   return [
     {
       id: "token-blame.tool-result-bloat",
       title: "Possible tool result bloat",
       severity: "medium",
-      scoreContribution: 12,
+      scoreContribution,
       sampleSize: unique.length,
       affectedSessions: unique,
       confidence: 0.7,
@@ -543,12 +635,24 @@ function detectShortFragmentedSessions(sessions) {
   }
 
   const unique = [...new Set(affected)];
+  const scoreContribution = scoreForDriver({
+    baseScore: 12,
+    affectedCount: unique.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: 0.7,
+    affectedTokens: affected.reduce((sum, sessionId) => {
+      const match = sessions.find((session) => session.sessionId === sessionId);
+      return sum + (match ? match.totalTokens : 0);
+    }, 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
+  });
+
   return [
     {
       id: "token-blame.short-fragmented-sessions",
       title: "Many short sessions near the same timeline",
       severity: "medium",
-      scoreContribution: 12,
+      scoreContribution,
       sampleSize: unique.length,
       affectedSessions: unique,
       confidence: 0.68,
@@ -557,6 +661,85 @@ function detectShortFragmentedSessions(sessions) {
       evidenceSummary: `Cluster includes ${unique.length} session(s).`
     }
   ];
+}
+
+function detectHealthyCacheSignals(sessions) {
+  const signals = [];
+  const byProject = new Map();
+
+  for (const session of sessions) {
+    if (session.cacheReadRatio === null) {
+      continue;
+    }
+    const list = byProject.get(session.projectPath) || [];
+    list.push(session);
+    byProject.set(session.projectPath, list);
+  }
+
+  for (const [projectPath, sessionsForProject] of byProject.entries()) {
+    if (sessionsForProject.length < 2) {
+      continue;
+    }
+    const ratios = sessionsForProject.map((session) => session.cacheReadRatio).filter((ratio) => Number.isFinite(ratio));
+    if (ratios.length === 0) {
+      continue;
+    }
+
+    const projectMedian = quantile(ratios, 0.5);
+    const healthy = sessionsForProject.filter((session) => session.cacheReadRatio >= Math.max(0.25, projectMedian * 1.1));
+    if (healthy.length >= 2) {
+      signals.push({
+        id: "token-blame.cache-health.reuse",
+        title: "Cache reuse appears healthy",
+        severity: "low",
+        isPositive: true,
+        scoreContribution: 0,
+        affectedSessions: [...new Set(healthy.map((session) => session.sessionId))],
+        confidence: 0.8,
+        why: `Project ${projectPath} has ${healthy.length} sessions with cache read ratios above project median.`,
+        likelyFix: "Keep cache-reuse-friendly structure stable across these sessions.",
+        evidenceSummary: `Healthy cache sessions: ${healthy.map((session) => session.sessionId).join(", ")}`
+      });
+    }
+  }
+
+  const byProjectModel = new Map();
+  for (const session of sessions) {
+    for (const model of session.modelList) {
+      const key = `${session.projectPath}|${model}`;
+      const list = byProjectModel.get(key) || [];
+      list.push(session);
+      byProjectModel.set(key, list);
+    }
+  }
+
+  for (const [projectModelKey, sessionsForPair] of byProjectModel.entries()) {
+    if (sessionsForPair.length < 3) {
+      continue;
+    }
+    const ratios = sessionsForPair.map((session) => session.cacheReadRatio).filter((ratio) => Number.isFinite(ratio));
+    if (ratios.length < 3) {
+      continue;
+    }
+    const minRatio = Math.min(...ratios);
+    const maxRatio = Math.max(...ratios);
+    if (minRatio >= 0.15 && (maxRatio - minRatio) <= 0.6) {
+      signals.push({
+        id: "token-blame.cache-health.stable-reuse",
+        title: "Stable cache reuse for project/model pair",
+        severity: "low",
+        isPositive: true,
+        scoreContribution: 0,
+        affectedSessions: [...new Set(sessionsForPair.map((session) => session.sessionId))],
+        confidence: 0.72,
+        why: `Project/model pair ${projectModelKey} shows low cache-read ratio volatility and sustained reuse.`,
+        likelyFix: "Reuse this stable session pattern as a template for future runs.",
+        evidenceSummary: `Pair session count: ${sessionsForPair.length}`
+      });
+    }
+  }
+
+  return signals;
 }
 
 function aggregateModelBreakdowns(entries) {
@@ -607,6 +790,34 @@ function quantile(values, pct) {
   const sorted = [...values].sort((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * pct) - 1));
   return sorted[index];
+}
+
+function scoreForDriver({
+  baseScore,
+  affectedCount,
+  totalSessions,
+  distanceToThreshold = 0,
+  affectedTokens = 0,
+  totalTokens = 0
+}) {
+  const total = Math.max(1, totalSessions);
+  const affected = Math.min(Math.max(affectedCount, 0), total);
+  const coverage = affected / total;
+  const relativeMagnitude = affectedTokens > 0 && totalTokens > 0 ? Math.min(1, affectedTokens / totalTokens) : 0;
+  const absoluteMagnitude = Math.min(Math.log10(Math.max(affectedTokens, 1)) / 4.5, 1);
+  const magnitude = Math.min(1, (0.7 * relativeMagnitude) + (0.3 * absoluteMagnitude));
+  const severityBoost = clamp(1 + clamp(distanceToThreshold, 0, 2) * 0.4, 1, 2.5);
+  const tokenBoost = 1 + magnitude * 0.8;
+  return Math.round(baseScore * (0.4 + coverage) * severityBoost * tokenBoost);
+}
+
+function sessionTokenTotal(sessions, sessionId) {
+  for (const session of sessions) {
+    if (session.sessionId === sessionId) {
+      return session.totalTokens;
+    }
+  }
+  return 0;
 }
 
 function uniqueSessions(events) {

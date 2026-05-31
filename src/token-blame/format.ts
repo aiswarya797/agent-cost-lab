@@ -41,6 +41,18 @@ export function formatTokenBlameText(report) {
     }
   }
 
+  if (Array.isArray(report.healthySignals) && report.healthySignals.length > 0) {
+    lines.push("");
+    lines.push("Healthy signals:");
+    for (const signal of report.healthySignals) {
+      lines.push(`  [${signal.severity}] ${signal.title}`);
+      lines.push(`    id: ${signal.id}`);
+      lines.push(`    sessions (${signal.affectedSessions.length}): ${signal.affectedSessions.join(", ") || "none"}`);
+      lines.push(`    confidence: ${signal.confidence}`);
+      lines.push(`    why: ${signal.why}`);
+    }
+  }
+
   lines.push("");
   lines.push("Recommendations:");
   for (const recommendation of report.recommendations) {
