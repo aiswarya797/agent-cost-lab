@@ -87,6 +87,16 @@ test("commands with only shared first token do not trigger repeated_retries", as
   assert.equal(report.drivers.some((driver) => driver.id === "token-blame.repeated-retries"), false);
 });
 
+test("claude transcript nested message.usage fields parse model and token buckets", async () => {
+  const result = await runTokenBlame(["--input", fixture("claude-message-usage.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 2);
+  assert.equal(report.summary.totalInputTokens, 155);
+  assert.equal(report.summary.totalOutputTokens, 100);
+  assert.equal(report.sessions[0].modelList.includes("claude-3-5-sonnet-20240620"), true);
+});
+
 test("sessions without cache writes do not automatically trigger cache-miss", async () => {
   const result = await runTokenBlame(["--input", fixture("no-cache-writes.json"), "--json"]);
   const report = JSON.parse(result.stdout);

@@ -6,11 +6,6 @@ Agent Cost Lab reports local cost-hygiene checks that are useful before and duri
 
 `audit` is a local, one-pass check of repository instruction and workflow files to surface startup-context, output-noise, and verification-hygiene issues.
 
-## token-blame
-
-`token-blame` is local spend-driver diagnostics over usage logs. It is a parser-only workflow: no API or telemetry calls are made, and nothing from logs is uploaded.
-It is intentionally local/developer-side diagnostics and does not yet link findings to future tool outcomes.
-
 ## Current audit scope
 
 The `audit` command reports local cost-hygiene signals in one compact pass.
@@ -28,6 +23,11 @@ The `audit` command reports local cost-hygiene signals in one compact pass.
 | Missing verification ladder (install/lint/typecheck/unit/full/build) | Weak guardrails increase late-cycle failures and rework. |
 | Usage visibility signals | Better visibility reduces repeated debugging cycles. |
 | Human/JSON finding consistency | Mixed output formats can cause downstream confusion and extra work. |
+
+## token-blame
+
+`token-blame` is local spend-driver diagnostics over usage logs. It is a parser-only workflow: no API or telemetry calls are made, and nothing from logs is uploaded.
+It is intentionally local/developer-side diagnostics and does not yet link findings to future tool outcomes.
 
 ## Result model
 
@@ -50,4 +50,8 @@ npx agent-cost-lab token-blame --input usage.json --json
 ```sh
 node dist/cli.js token-blame --input usage.json
 node dist/cli.js token-blame --input usage.json --json
+npx agent-cost-lab token-blame --input ~/.claude/projects/<project-id>.jsonl
+npx agent-cost-lab token-blame --input ~/.claude/projects/<project-id>.jsonl --json
 ```
+
+`token-blame` supports both top-level and message-wrapped transcript fields used by Claude Code exports, including `message.model` and `message.usage.*`.

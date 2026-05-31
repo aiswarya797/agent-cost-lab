@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 
 const TIMESTAMP_KEYS = [
+  ["message", "timestamp"],
+  ["message", "start_time"],
+  ["message", "startTime"],
   ["startTime"],
   ["startedAt"],
   ["start"],
@@ -10,6 +13,8 @@ const TIMESTAMP_KEYS = [
 ];
 
 const END_TIME_KEYS = [
+  ["message", "end_time"],
+  ["message", "endTime"],
   ["endTime"],
   ["end"],
   ["finishedAt"],
@@ -27,6 +32,8 @@ const RAW_TIMESTAMP_KEYS = [
 
 const NUMBER_PATHS = {
   inputTokens: [
+    ["message", "usage", "inputTokens"],
+    ["message", "usage", "input_tokens"],
     ["inputTokens"],
     ["input_tokens"],
     ["usage", "inputTokens"],
@@ -34,6 +41,8 @@ const NUMBER_PATHS = {
     ["usage", "totalInputTokens"]
   ],
   outputTokens: [
+    ["message", "usage", "outputTokens"],
+    ["message", "usage", "output_tokens"],
     ["outputTokens"],
     ["output_tokens"],
     ["usage", "outputTokens"],
@@ -41,6 +50,10 @@ const NUMBER_PATHS = {
     ["usage", "totalOutputTokens"]
   ],
   cacheWriteTokens: [
+    ["message", "usage", "cache_creation_input_tokens"],
+    ["message", "usage", "cache_creation_tokens"],
+    ["message", "usage", "cacheWriteTokens"],
+    ["message", "usage", "cache_write_tokens"],
     ["cacheCreationTokens"],
     ["cache_creation_tokens"],
     ["cache_creation_input_tokens"],
@@ -49,6 +62,9 @@ const NUMBER_PATHS = {
     ["cache_write_tokens"]
   ],
   cacheReadTokens: [
+    ["message", "usage", "cache_read_input_tokens"],
+    ["message", "usage", "cache_read_tokens"],
+    ["message", "usage", "cacheReadTokens"],
     ["cacheReadTokens"],
     ["cache_read_tokens"],
     ["cache_read_input_tokens"],
@@ -56,12 +72,17 @@ const NUMBER_PATHS = {
     ["usage", "cacheReadTokens"]
   ],
   totalTokens: [
+    ["message", "usage", "total_tokens"],
+    ["message", "usage", "totalTokens"],
     ["totalTokens"],
     ["total_tokens"],
     ["tokenCount"],
     ["usage", "total_tokens"]
   ],
   toolResultTokens: [
+    ["message", "usage", "tool_result_tokens"],
+    ["message", "usage", "toolOutputTokens"],
+    ["message", "usage", "tool_output_tokens"],
     ["toolResultTokens"],
     ["tool_result_tokens"],
     ["tool_output_tokens"],
@@ -71,6 +92,8 @@ const NUMBER_PATHS = {
     ["usage", "tool_output_tokens"]
   ],
   totalCost: [
+    ["message", "usage", "cost"],
+    ["message", "usage", "total_cost"],
     ["totalCost"],
     ["total_cost"],
     ["usage", "cost"]
@@ -176,7 +199,16 @@ export function normalizeUsageEvent(event, context = {}) {
     throw new Error("Usage entry is not an object");
   }
 
-  const sessionId = getFirstString(event, [["session_id"], ["sessionId"], ["session"], ["id"]]) || `inferred-${context.index ?? 0}`;
+  const sessionId = getFirstString(event, [
+    ["message", "session_id"],
+    ["message", "sessionId"],
+    ["message", "session"],
+    ["message", "id"],
+    ["session_id"],
+    ["sessionId"],
+    ["session"],
+    ["id"]
+  ]) || `inferred-${context.index ?? 0}`;
   const projectPath = getFirstString(event, [["projectPath"], ["project_path"], ["project"], ["rootPath"]]) || context.projectPath || "unknown-project";
   const modelList = extractModels(event);
   const startTimeMs = extractTimestamp(event, TIMESTAMP_KEYS);
@@ -204,6 +236,12 @@ export function normalizeUsageEvent(event, context = {}) {
   }
 
   const commandText = getFirstString(event, [
+    ["message", "command"],
+    ["message", "userPrompt"],
+    ["message", "prompt"],
+    ["message", "input"],
+    ["message", "content"],
+    ["message", "text"],
     ["command"],
     ["userPrompt"],
     ["prompt"],
@@ -275,7 +313,7 @@ function normalizeModelBreakdowns(event) {
 }
 
 function extractModels(event) {
-  const modelsUsed = getByPath(event, ["modelsUsed"]);
+  const modelsUsed = getByPath(event, ["modelsUsed"]) ?? getByPath(event, ["message", "modelsUsed"]) ?? getByPath(event, ["message", "models"]);
   const models = [];
 
   if (Array.isArray(modelsUsed)) {
@@ -286,7 +324,14 @@ function extractModels(event) {
     }
   }
 
-  const fallbackModel = getFirstString(event, [["model"], ["modelName"], ["provider", "model"]]);
+  const fallbackModel = getFirstString(event, [
+    ["message", "model"],
+    ["message", "modelName"],
+    ["message", "provider", "model"],
+    ["model"],
+    ["modelName"],
+    ["provider", "model"]
+  ]);
   if (fallbackModel) {
     models.push(fallbackModel);
   }
