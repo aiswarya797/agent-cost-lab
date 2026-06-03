@@ -365,11 +365,25 @@ export function normalizeUsageEvent(event, context = {}) {
     ["message", "session"],
     ["message", "session", "id"],
     ["message", "session", "sessionId"],
-    ["message", "id"],
+    ["message", "conversation_id"],
+    ["message", "conversationId"],
     ["session_id"],
     ["sessionId"],
+    ["conversation_id"],
+    ["conversationId"],
     ["session"]
-  ]) || context.fallbackSessionId || `inferred-${context.index ?? 0}`;
+  ])
+    || getFirstStringFromMessageContext(event, "session_id")
+    || getFirstStringFromMessageContext(event, "sessionId")
+    || getFirstStringFromMessageContext(event, "conversation_id")
+    || getFirstStringFromMessageContext(event, "conversationId")
+    || getFirstStringFromContext(event, "session_id")
+    || getFirstStringFromContext(event, "sessionId")
+    || getFirstStringFromContext(event, "conversation_id")
+    || getFirstStringFromContext(event, "conversationId")
+    || getFirstString(event, [["message", "id"]])
+    || context.fallbackSessionId
+    || `inferred-${context.index ?? 0}`;
   const projectPath = getFirstString(event, [
     ["message", "caller"],
     ["message", "metadata", "project"],
@@ -591,9 +605,15 @@ function coerceFiniteNumber(value) {
   return undefined;
 }
 
-function getFirstStringFromMessageContext(event, key) {
-  const contextItems = getByPath(event, ["message", "context"]);
+function getFirstStringFromContextItems(contextItems, key) {
+  if (!contextItems || typeof contextItems !== "object") {
+    return undefined;
+  }
+
   if (!Array.isArray(contextItems)) {
+    if (typeof contextItems[key] === "string" && contextItems[key].trim()) {
+      return contextItems[key].trim();
+    }
     return undefined;
   }
 
@@ -614,6 +634,14 @@ function getFirstStringFromMessageContext(event, key) {
   }
 
   return undefined;
+}
+
+function getFirstStringFromMessageContext(event, key) {
+  return getFirstStringFromContextItems(getByPath(event, ["message", "context"]), key);
+}
+
+function getFirstStringFromContext(event, key) {
+  return getFirstStringFromContextItems(getByPath(event, ["context"]), key);
 }
 
 function deriveProjectPathFromSource(source) {
@@ -884,19 +912,6 @@ function getFirstNumber(source, candidates) {
     const value = coerceFiniteNumber(raw);
     if (Number.isFinite(value)) {
       return value;
-    }
-  }
-  return undefined;
-}
-
-function coerceFiniteNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
     }
   }
   return undefined;
