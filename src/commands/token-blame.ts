@@ -6,7 +6,9 @@ import { formatTokenBlameJson, formatTokenBlameText } from "../token-blame/forma
 export async function runTokenBlameCommand(options) {
   const inputPath = path.resolve(options.input);
   const parsed = await parseUsageFile(inputPath);
-  const analysis = analyzeTokenUsage(parsed);
+  const analysis = analyzeTokenUsage(parsed, {
+    noCost: options.noCost
+  });
   const report = createTokenBlameReport({
     inputPath,
     sessions: analysis.sessions,
@@ -15,6 +17,7 @@ export async function runTokenBlameCommand(options) {
     healthySignals: analysis.healthySignals,
     warnings: parsed.warnings ?? [],
     verbose: options.verbose,
+    noCost: options.noCost,
     unknownSessionAttribution: analysis.attributionCounts
   });
 
@@ -23,11 +26,20 @@ export async function runTokenBlameCommand(options) {
 
 export function createTokenBlameReport(result) {
   const verbose = Boolean(result.verbose);
+  const includeCost = result.noCost !== true;
   const sortedDrivers = sortDrivers(result.drivers);
   const blameScore = clampNumber(sortedDrivers.reduce((total, driver) => total + driver.scoreContribution, 0), 0, 100);
-  const compactSessions = (result.sessions || []).map(compactSessionSummary);
+  const compactSessions = (result.sessions || []).map((session) => compactSessionSummary(session, includeCost));
+  const costAwareSessionSort = (left, right) => {
+    const leftCost = Number.isFinite(left.estimatedCost) ? left.estimatedCost : Number.NEGATIVE_INFINITY;
+    const rightCost = Number.isFinite(right.estimatedCost) ? right.estimatedCost : Number.NEGATIVE_INFINITY;
+    if (rightCost !== leftCost) {
+      return rightCost - leftCost;
+    }
+    return (right.totalTokens || 0) - (left.totalTokens || 0);
+  };
   const topSessions = [...compactSessions]
-    .sort((left, right) => (right.totalTokens || 0) - (left.totalTokens || 0))
+    .sort(includeCost ? costAwareSessionSort : (left, right) => (right.totalTokens || 0) - (left.totalTokens || 0))
     .slice(0, 8)
     .map((session) => ({
       sessionId: session.sessionId,
@@ -35,7 +47,10 @@ export function createTokenBlameReport(result) {
       modelList: session.modelList,
       totalTokens: session.totalTokens,
       eventCount: session.eventCount,
-      durationMs: session.durationMs
+      durationMs: session.durationMs,
+      estimatedCost: session.estimatedCost,
+      estimatedCostWithoutCache: session.estimatedCostWithoutCache,
+      estimatedCacheSavings: session.estimatedCacheSavings
     }));
 
   const unknownSessionAttribution = result.unknownSessionAttribution || { project: 0, model: 0 };
@@ -64,6 +79,11 @@ export function createTokenBlameReport(result) {
     sessions: verbose ? result.sessions : compactSessions,
     drivers: sortedDrivers,
     topSessions,
+    topProjectsByEstimatedCost: pickTopOffenders(result.summary?.byProject || []),
+    topModelsByEstimatedCost: pickTopOffenders(result.summary?.byModel || []),
+    topToolsByEstimatedCost: pickTopOffenders(result.summary?.topTools || []),
+    topTools: result.summary?.topTools || [],
+    topToolCategories: result.summary?.topToolCategories || result.summary?.commandCategories || [],
     healthySignals: result.healthySignals || [],
     recommendations: buildRecommendations(sortedDrivers),
     unknownSessionAttribution,
@@ -94,6 +114,10 @@ function compactSessionSummary(session) {
     durationMs: session.durationMs,
     outputRatio: session.outputRatio,
     cacheReadRatio: session.cacheReadRatio,
+    estimatedCost: session.estimatedCost,
+    estimatedCostWithoutCache: session.estimatedCostWithoutCache,
+    estimatedCacheSavings: session.estimatedCacheSavings,
+    estimatedCacheSavingsRatio: session.estimatedCacheSavingsRatio,
     modelBreakdowns: session.modelBreakdowns
   };
 }
@@ -117,6 +141,27 @@ function sortDrivers(drivers) {
     const severityRank = { high: 0, medium: 1, low: 2 };
     return severityRank[left.severity] - severityRank[right.severity];
   });
+}
+
+function pickTopOffenders(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const withCost = [...items]
+    .filter((item) => Number.isFinite(item.estimatedCost))
+    .sort((left, right) => right.estimatedCost - left.estimatedCost)
+    .slice(0, 8)
+    .map((item) => ({
+      ...item,
+      estimatedCost: Number.isFinite(item.estimatedCost) ? item.estimatedCost : 0
+    }));
+
+  if (withCost.length > 0) {
+    return withCost;
+  }
+
+  return [...items].slice(0, 8);
 }
 
 function clampNumber(value, min, max) {

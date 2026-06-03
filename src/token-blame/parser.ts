@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 const TIMESTAMP_KEYS = [
@@ -16,12 +16,30 @@ const TIMESTAMP_KEYS = [
 const END_TIME_KEYS = [
   ["message", "end_time"],
   ["message", "endTime"],
+  ["message", "end_time_ms"],
+  ["message", "endTimeMs"],
+  ["message", "end_timestamp"],
+  ["message", "endTimestamp"],
   ["endTime"],
   ["end"],
   ["finishedAt"],
   ["stoppedAt"],
   ["lastActivity"],
   ["session", "lastActivity"]
+];
+
+const DURATION_KEYS = [
+  ["message", "duration_ms"],
+  ["message", "durationMs"],
+  ["message", "turn_duration_ms"],
+  ["message", "turnDurationMs"],
+  ["message", "turn_duration"],
+  ["message", "turnDuration"],
+  ["duration_ms"],
+  ["durationMs"],
+  ["duration"],
+  ["turnDuration"],
+  ["turn_duration"]
 ];
 
 const RAW_TIMESTAMP_KEYS = [
@@ -110,17 +128,114 @@ const TOOL_RESULT_CONTEXT_PATHS = [
 ];
 
 export async function parseUsageFile(filePath) {
-  let rawText;
+  const source = path.resolve(filePath);
+
+  let sourceStat;
   try {
-    rawText = await readFile(filePath, "utf8");
+    sourceStat = await stat(source);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      throw new Error(`Cannot read usage input file: ${filePath}`);
+      throw new Error(`Cannot read usage input file: ${source}`);
     }
-    throw new Error(`Unable to read usage input file: ${filePath}`);
+    throw new Error(`Unable to read usage input file: ${source}`);
   }
 
-  return parseUsageText(rawText, { source: filePath });
+  if (sourceStat?.isDirectory()) {
+    return parseUsageDirectory(source);
+  }
+
+  let rawText;
+  try {
+    rawText = await readFile(source, "utf8");
+  } catch (error) {
+    throw new Error(`Unable to read usage input file: ${source}`);
+  }
+
+  return parseUsageText(rawText, { source });
+}
+
+async function parseUsageDirectory(directoryPath) {
+  const usagePaths = await collectUsageSourcePaths(directoryPath);
+  if (usagePaths.length === 0) {
+    throw new Error(`No usage files found in directory: ${directoryPath}`);
+  }
+
+  const sessions = [];
+  const warnings = [];
+  for (const source of usagePaths) {
+    let rawText;
+    try {
+      rawText = await readFile(source, "utf8");
+    } catch (error) {
+      warnings.push(`Skipping unreadable file ${source}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+
+    try {
+      const parsed = parseUsageText(rawText, { source });
+      sessions.push(...parsed.sessions);
+      for (const warning of parsed.warnings) {
+        warnings.push(`[${source}] ${warning}`);
+      }
+    } catch (error) {
+      warnings.push(`Skipping unreadable content in ${source}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (sessions.length === 0) {
+    throw new Error(`No parseable usage entries found in ${directoryPath}`);
+  }
+
+  return { source: directoryPath, sessions, warnings };
+}
+
+async function collectUsageSourcePaths(rootDir) {
+  const queue = [rootDir];
+  const usagePaths = [];
+
+  while (queue.length > 0) {
+    const current = queue.pop();
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch (error) {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) {
+        continue;
+      }
+
+      const childPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(childPath);
+        continue;
+      }
+
+      if (entry.isFile() && isUsageCandidateFile(childPath)) {
+        usagePaths.push(childPath);
+      }
+    }
+  }
+
+  return usagePaths.sort();
+}
+
+function isUsageCandidateFile(filePath) {
+  const name = path.basename(filePath);
+  if (name.endsWith(".jsonl")) {
+    return true;
+  }
+  if (name === "stats-cache.json" || name === "session-meta.json") {
+    return true;
+  }
+  if (!name.endsWith(".json")) {
+    return false;
+  }
+
+  const parts = filePath.split(path.sep);
+  return parts.includes("session-meta") || parts.includes("usage-data");
 }
 
 export function parseUsageText(rawText, options = {}) {
@@ -154,14 +269,19 @@ export function parseUsageText(rawText, options = {}) {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     try {
-      sessions.push(normalizeUsageEvent(JSON.parse(line), {
+      const parsedLine = JSON.parse(line);
+      sessions.push(normalizeUsageEvent(parsedLine, {
         index,
         fallbackSessionId,
         source
       }));
     } catch (error) {
-      throw new Error(`Invalid JSONL at line ${index + 1} in ${source}: ${error.message}`);
+      warnings.push(`Skipping invalid JSONL at line ${index + 1} in ${source}: ${error.message}`);
     }
+  }
+
+  if (sessions.length === 0) {
+    throw new Error(`No valid JSONL entries in ${source}`);
   }
 
   return { source, sessions, warnings };
@@ -178,22 +298,30 @@ function parseStructuredUsage(data, source) {
 
   if (Array.isArray(data)) {
     for (let index = 0; index < data.length; index += 1) {
-      sessions.push(normalizeUsageEvent(data[index], {
-        index,
-        fallbackSessionId,
-        source
-      }));
+      try {
+        sessions.push(normalizeUsageEvent(data[index], {
+          index,
+          fallbackSessionId,
+          source
+        }));
+      } catch (error) {
+        warnings.push(`Skipping invalid entry ${index + 1} in ${source}: ${error.message}`);
+      }
     }
     return { source, sessions, warnings };
   }
 
   if (Array.isArray(data.data) && data.type === "session") {
     for (let index = 0; index < data.data.length; index += 1) {
-      sessions.push(normalizeUsageEvent(data.data[index], {
-        index,
-        fallbackSessionId,
-        source
-      }));
+      try {
+        sessions.push(normalizeUsageEvent(data.data[index], {
+          index,
+          fallbackSessionId,
+          source
+        }));
+      } catch (error) {
+        warnings.push(`Skipping invalid session entry ${index + 1} in ${source}: ${error.message}`);
+      }
     }
     return { source, sessions, warnings };
   }
@@ -207,12 +335,16 @@ function parseStructuredUsage(data, source) {
 
       for (let index = 0; index < projectEntries.length; index += 1) {
         const entry = projectEntries[index];
-        sessions.push(normalizeUsageEvent(entry, {
-          index,
-          projectPath,
-          source,
-          fallbackSessionId: `${fallbackSessionId}:project-${projectPath}`
-        }));
+        try {
+          sessions.push(normalizeUsageEvent(entry, {
+            index,
+            projectPath,
+            source,
+            fallbackSessionId: `${fallbackSessionId}:project-${projectPath}`
+          }));
+        } catch (error) {
+          warnings.push(`Skipping invalid project entry ${projectPath} index ${index + 1} in ${source}: ${error.message}`);
+        }
       }
     }
     return { source, sessions, warnings };
@@ -270,6 +402,24 @@ export function normalizeUsageEvent(event, context = {}) {
   const startTimeMs = extractTimestamp(event, TIMESTAMP_KEYS);
   const endTimeMs = extractTimestamp(event, END_TIME_KEYS);
   const fallbackTs = extractTimestamp(event, RAW_TIMESTAMP_KEYS);
+  const turnDurationMs = extractDurationMs(event);
+  let resolvedStartTimeMs = firstDefinedNumber(startTimeMs, fallbackTs);
+  const hasExplicitEndTime = Number.isFinite(endTimeMs);
+  let resolvedEndTimeMs = hasExplicitEndTime ? endTimeMs : undefined;
+
+  if (!Number.isFinite(resolvedEndTimeMs) && Number.isFinite(fallbackTs) && !Number.isFinite(resolvedStartTimeMs)) {
+    resolvedStartTimeMs = fallbackTs;
+  }
+  if (!Number.isFinite(resolvedEndTimeMs) && Number.isFinite(resolvedStartTimeMs) && Number.isFinite(turnDurationMs)) {
+    resolvedEndTimeMs = resolvedStartTimeMs + turnDurationMs;
+  }
+  if (!Number.isFinite(resolvedStartTimeMs) && Number.isFinite(resolvedEndTimeMs) && Number.isFinite(turnDurationMs)) {
+    resolvedStartTimeMs = resolvedEndTimeMs - turnDurationMs;
+  }
+
+  if (!hasExplicitEndTime && !Number.isFinite(resolvedEndTimeMs) && Number.isFinite(fallbackTs)) {
+    resolvedEndTimeMs = fallbackTs;
+  }
 
   const inputTokens = getFirstNumber(event, NUMBER_PATHS.inputTokens) ?? 0;
   const outputTokens = getFirstNumber(event, NUMBER_PATHS.outputTokens) ?? 0;
@@ -308,8 +458,13 @@ export function normalizeUsageEvent(event, context = {}) {
     ["message"],
     ["text"]
   ]);
-  const toolName = getFirstString(event, [["tool"], ["toolName"], ["tool_name"]]);
-  const toolCallSignature = normalizeSignature(getFirstString(event, [["toolCall"], ["tool_call"], ["toolCallName"]]) || "");
+  const extractedToolName = getFirstString(event, [["tool"], ["toolName"], ["tool_name"], ["toolCall"], ["toolCallName"], ["tool_call"]])
+    || extractToolNameFromMessage(event)
+    || getFirstString(event, [["message", "tool"], ["message", "toolName"], ["message", "tool_name"], ["message", "toolCall"], ["message", "tool_call"], ["message", "toolCallName"]]);
+  const extractedToolCallSignature = getFirstString(event, [["toolCall"], ["tool_call"], ["toolCallName"], ["message", "toolCall"], ["message", "tool_call"], ["message", "toolCallName"]])
+    || extractedToolName;
+  const toolName = extractedToolName;
+  const toolCallSignature = normalizeSignature(extractedToolCallSignature || "");
   const commandSignature = normalizeSignature(commandText || "");
   const isCommandLike = Boolean(
     commandText &&
@@ -338,12 +493,102 @@ export function normalizeUsageEvent(event, context = {}) {
     cacheReadTokens,
     totalCost: Number.isFinite(totalCost) ? totalCost : undefined,
     totalTokens,
-    startTimeMs: firstDefinedNumber(startTimeMs, fallbackTs),
-    endTimeMs: firstDefinedNumber(endTimeMs, fallbackTs),
+    startTimeMs: firstDefinedNumber(resolvedStartTimeMs, fallbackTs),
+    endTimeMs: resolvedEndTimeMs,
     raw,
     toolResultTokens,
     modelBreakdowns
   };
+}
+
+function extractDurationMs(event) {
+  for (const path of DURATION_KEYS) {
+    const duration = coerceFiniteNumber(getByPath(event, path));
+    if (Number.isFinite(duration)) {
+      return duration;
+    }
+  }
+  return undefined;
+}
+
+function extractToolNameFromMessage(event) {
+  const message = getByPath(event, ["message"]);
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const content = getByPath(message, ["content"]);
+  if (Array.isArray(content)) {
+    const fromContent = extractToolNameFromMessageContent(content);
+    if (fromContent) {
+      return fromContent;
+    }
+  }
+
+  const fromTools = extractToolNameFromMessageTools(getByPath(message, ["tool_calls"]))
+    || extractToolNameFromMessageTools(getByPath(message, ["tools"]))
+    || extractToolNameFromMessageTools(getByPath(message, ["toolCall"]))
+    || getFirstString(message, [["tool"], ["toolName"], ["tool_name"]]);
+
+  return fromTools;
+}
+
+function extractToolNameFromMessageContent(content) {
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+    if (type === "tool_use" || type === "tool-use" || type === "toolcall" || type === "tool-call") {
+      if (typeof item.name === "string" && item.name.trim()) {
+        return item.name.trim();
+      }
+    }
+
+    const direct = item.name;
+    if (typeof direct === "string" && direct.trim()) {
+      return direct.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function extractToolNameFromMessageTools(tools) {
+  if (!tools) {
+    return undefined;
+  }
+
+  const normalizedTools = Array.isArray(tools) ? tools : [tools];
+  for (const tool of normalizedTools) {
+    if (!tool || typeof tool !== "object") {
+      continue;
+    }
+
+    const direct = getFirstString(tool, [["name"], ["tool", "name"], ["id"], ["tool_name"], ["toolName"]]);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  return undefined;
+}
+
+function coerceFiniteNumber(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const direct = Number(value);
+    if (Number.isFinite(direct)) {
+      return direct;
+    }
+  }
+  return undefined;
 }
 
 function getFirstStringFromMessageContext(event, key) {
@@ -377,11 +622,21 @@ function deriveProjectPathFromSource(source) {
   }
 
   const parts = source.split(path.sep);
-  if (!parts.includes("projects")) {
+  const projectsIndex = parts.lastIndexOf("projects");
+  if (projectsIndex === -1) {
     return undefined;
   }
 
-  return path.parse(source).name;
+  const afterProjects = parts.slice(projectsIndex + 1, parts.length - 1);
+  if (afterProjects.length === 0) {
+    return undefined;
+  }
+
+  if (afterProjects.length === 1) {
+    return path.parse(source).name;
+  }
+
+  return afterProjects[0];
 }
 
 function normalizeModelBreakdowns(event) {

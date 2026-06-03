@@ -12,9 +12,52 @@ export function formatTokenBlameText(report) {
     `  cacheWriteTokens: ${report.summary.totalCacheWriteTokens}`,
     `  cacheReadTokens: ${report.summary.totalCacheReadTokens}`,
     `  toolResultTokens: ${report.summary.totalToolResultTokens || 0}`,
-    "",
+    `  estimatedCost: ${typeof report.summary.totalEstimatedCost === "number" ? report.summary.totalEstimatedCost : "n/a"}`,
+    `  estimatedCostWithoutCache: ${typeof report.summary.totalEstimatedCostWithoutCache === "number" ? report.summary.totalEstimatedCostWithoutCache : "n/a"}`,
+    `  estimatedCacheSavings: ${typeof report.summary.totalEstimatedCacheSavings === "number" ? report.summary.totalEstimatedCacheSavings : "n/a"}`,
+  "",
     "Findings:"
   ];
+
+  if (Array.isArray(report.topSessions) && report.topSessions.length > 0) {
+    lines.push("");
+    lines.push("Top sessions by estimated cost:");
+    for (const topSession of report.topSessions.slice(0, 3)) {
+      lines.push(`  - ${topSession.sessionId}: ${typeof topSession.estimatedCost === "number" ? topSession.estimatedCost : topSession.totalTokens}`);
+    }
+  }
+
+  if (Array.isArray(report.topProjectsByEstimatedCost) && report.topProjectsByEstimatedCost.length > 0) {
+    lines.push("");
+    lines.push("Top projects by estimated cost:");
+    for (const topProject of report.topProjectsByEstimatedCost.slice(0, 3)) {
+      lines.push(`  - ${topProject.projectPath}: ${typeof topProject.estimatedCost === "number" ? topProject.estimatedCost : topProject.totalTokens}`);
+    }
+  }
+
+  if (Array.isArray(report.topModelsByEstimatedCost) && report.topModelsByEstimatedCost.length > 0) {
+    lines.push("");
+    lines.push("Top models by estimated cost:");
+    for (const topModel of report.topModelsByEstimatedCost.slice(0, 3)) {
+      lines.push(`  - ${topModel.model}: ${typeof topModel.estimatedCost === "number" ? topModel.estimatedCost : topModel.totalTokens}`);
+    }
+  }
+
+  if (Array.isArray(report.topToolsByEstimatedCost) && report.topToolsByEstimatedCost.length > 0) {
+    lines.push("");
+    lines.push("Top tools by estimated cost:");
+    for (const topTool of report.topToolsByEstimatedCost.slice(0, 3)) {
+      lines.push(`  - ${topTool.toolName}: ${typeof topTool.estimatedCost === "number" ? topTool.estimatedCost : topTool.score}`);
+    }
+  }
+
+  if (Array.isArray(report.topToolCategories) && report.topToolCategories.length > 0) {
+    lines.push("");
+    lines.push("Top tool categories:");
+    for (const category of report.topToolCategories.slice(0, 3)) {
+      lines.push(`  - ${category.category}: ${category.score}`);
+    }
+  }
 
   if (report.drivers.length === 0) {
     lines.push("  No high-confidence drivers were detected in this file.");

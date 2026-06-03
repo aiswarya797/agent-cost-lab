@@ -1,0 +1,2 @@
+{"message":{"session":"alpha-1","project":"alpha-project","model":"gpt-4o-mini","prompt":"dir alpha first","usage":{"input_tokens":80,"output_tokens":24,"cache_creation_input_tokens":10,"cache_read_input_tokens":2}},"timestamp":"2026-03-01T09:00:00.000Z"}
+{"message":{"session":"alpha-2","project":"alpha-project","model":"gpt-4o-mini","prompt":"dir alpha second","usage":{"input_tokens":20,"output_tokens":6,"cache_creation_input_tokens":1,"cache_read_input_tokens":1},"timestamp":"2026-03-01T09:10:00.000Z"}

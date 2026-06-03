@@ -1,0 +1,1 @@
+{"message":{"session":"cost-session","project":"cost-project","model":"gpt-4o-mini","prompt":"long analysis","command":"generate report","usage":{"input_tokens":30000,"output_tokens":8000,"cache_creation_input_tokens":500,"cache_read_input_tokens":1800}},"timestamp":"2026-03-03T08:00:00.000Z"}

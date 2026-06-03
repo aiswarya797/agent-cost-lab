@@ -36,6 +36,17 @@ test("project-grouped JSON is parsed as multiple projects", async () => {
   assert.equal(report.summary.totalSessions, 3);
 });
 
+test("source-dir input scans nested Claude transcript directories", async () => {
+  const result = await runTokenBlame(["--source-dir", fixture("source-dir"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions >= 3, true);
+  const projectPaths = new Set(report.sessions.map((session) => session.projectPath));
+  assert.equal(projectPaths.has("alpha-project"), true);
+  assert.equal(projectPaths.has("meta-project"), true);
+  assert.equal(projectPaths.has("stats-project"), true);
+});
+
 test("mixed known and missing project within a session resolves to dominant project", async () => {
   const result = await runTokenBlame(["--input", fixture("mixed-project-resolution.json"), "--json"]);
   const report = JSON.parse(result.stdout);
@@ -73,6 +84,34 @@ test("JSONL raw usage file is parsed", async () => {
   assert.equal(report.drivers.length >= 0, true);
 });
 
+test("malformed JSONL lines are skipped with warnings", async () => {
+  const result = await runTokenBlame(["--input", fixture("malformed-lines.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalSessions, 2);
+  assert.equal(report.summary.totalEvents, 2);
+  assert.equal(Array.isArray(report.warnings), true);
+  assert.equal(report.warnings.some((warning) => warning.includes("Skipping invalid JSONL")), true);
+});
+
+test("json report includes estimated cost projections by default", async () => {
+  const result = await runTokenBlame(["--input", fixture("session.json"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(typeof report.summary.totalEstimatedCost, "number");
+  assert.equal(typeof report.summary.totalEstimatedCostWithoutCache, "number");
+  assert.equal(typeof report.summary.totalEstimatedCacheSavings, "number");
+});
+
+test("no-cost mode suppresses estimated cost fields", async () => {
+  const result = await runTokenBlame(["--input", fixture("session.json"), "--json", "--no-cost"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.summary.totalEstimatedCost, undefined);
+  assert.equal(report.summary.totalEstimatedCostWithoutCache, undefined);
+  assert.equal(report.summary.totalEstimatedCacheSavings, undefined);
+});
+
 test("compact JSON omits per-event blobs by default", async () => {
   const result = await runTokenBlame(["--input", fixture("session.json"), "--json"]);
   const report = JSON.parse(result.stdout);
@@ -90,6 +129,13 @@ test("verbose JSON keeps per-event blobs", async () => {
   const hasEvents = report.sessions.some((session) => Array.isArray(session.events));
   assert.equal(hasEvents, true);
   assert.equal(report.sessions.some((session) => session.events.length > 0), true);
+});
+
+test("cost inefficiency without cache emits dedicated driver", async () => {
+  const result = await runTokenBlame(["--input", fixture("cost-inefficiency-without-cache.jsonl"), "--json"]);
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(report.drivers.some((driver) => driver.id === "token-blame.cost-inefficiency-without-cache"), true);
 });
 
 test("missing usage file path returns error", async () => {

@@ -11,6 +11,21 @@ const LOW_TIER_MODELS = new Set([
   "claude-3-haiku"
 ]);
 
+const MODEL_RATES = {
+  "gpt-4": { input: 0.00000003, output: 0.00000006 },
+  "gpt-4o": { input: 0.00000005, output: 0.0000001 },
+  "gpt-4o-mini": { input: 0.00000015, output: 0.0000006 },
+  "gpt-4.1-mini": { input: 0.00000015, output: 0.0000006 },
+  "gpt-3.5-turbo": { input: 0.0000005, output: 0.0000015 },
+  "claude-3-haiku": { input: 0.00000025, output: 0.00000125 },
+  "claude-3-haiku-20240307": { input: 0.00000025, output: 0.00000125 },
+  "claude-3-5-sonnet-20240620": { input: 0.0000003, output: 0.0000015 },
+  "claude-3-opus": { input: 0.0000015, output: 0.000006 },
+  "claude-3-opus-20240229": { input: 0.0000015, output: 0.000006 }
+};
+
+const DEFAULT_COST_RATE = { input: 0.0000004, output: 0.0000015 };
+
 const DRIVER_ORDER = [
   "token-blame.long-sessions",
   "token-blame.repeated-retries",
@@ -19,12 +34,15 @@ const DRIVER_ORDER = [
   "token-blame.cache-miss",
   "token-blame.cache-write-pressure",
   "token-blame.tool-result-bloat",
+  "token-blame.cost-inefficiency-without-cache",
+  "token-blame.noisy-tool-loop",
   "token-blame.short-fragmented-sessions"
 ];
 
-export function analyzeTokenUsage(parsed) {
-  const { sessions, attributionCounts } = summarizeEventsToSessions(parsed.sessions || []);
-  const summary = buildSummary(parsed.sessions || [], sessions);
+export function analyzeTokenUsage(parsed, options = {}) {
+  const includeCost = options.noCost !== true;
+  const { sessions, attributionCounts } = summarizeEventsToSessions(parsed.sessions || [], { includeCost });
+  const summary = buildSummary(parsed.sessions || [], sessions, { includeCost });
   const healthySignals = detectHealthyCacheSignals(sessions);
   const drivers = [
     ...detectLongSessions(sessions),
@@ -34,6 +52,8 @@ export function analyzeTokenUsage(parsed) {
     ...detectCacheMiss(sessions),
     ...detectCacheWritePressure(sessions),
     ...detectToolResultBloat(sessions),
+    ...(includeCost ? [...detectCostInefficiencyWithoutCache(sessions)] : []),
+    ...(includeCost ? [...detectNoisyToolLoop(sessions)] : []),
     ...detectShortFragmentedSessions(sessions)
   ];
 
@@ -46,7 +66,8 @@ export function analyzeTokenUsage(parsed) {
   };
 }
 
-function summarizeEventsToSessions(events) {
+function summarizeEventsToSessions(events, options = {}) {
+  const includeCost = options.includeCost !== false;
   const attributionCounts = {
     project: 0,
     model: 0
@@ -75,6 +96,11 @@ function summarizeEventsToSessions(events) {
       modelBreakdowns: [],
       commandSignatures: [],
       toolResultTokens: 0,
+      toolLoopSignals: {},
+      estimatedCost: undefined,
+      estimatedCostWithoutCache: undefined,
+      estimatedCacheSavings: undefined,
+      estimatedCacheSavingsRatio: undefined,
       startTimeMs: undefined,
       endTimeMs: undefined
     };
@@ -114,10 +140,16 @@ function summarizeEventsToSessions(events) {
     }
 
     for (const breakdown of event.modelBreakdowns || []) {
-      session.modelBreakdowns.push(breakdown);
+    session.modelBreakdowns.push(breakdown);
     }
 
     session.commandSignatures.push(event.raw?.commandSignature);
+    if (event.raw?.tool) {
+      session.toolLoopSignals[event.raw.tool] = (session.toolLoopSignals[event.raw.tool] || 0) + 1;
+    }
+    if (event.raw?.toolCallSignature) {
+      session.toolLoopSignals[event.raw.toolCallSignature] = (session.toolLoopSignals[event.raw.toolCallSignature] || 0) + 1;
+    }
 
     const eventStart = event.startTimeMs ?? event.endTimeMs;
     if (eventStart !== undefined) {
@@ -152,6 +184,14 @@ function summarizeEventsToSessions(events) {
         session.durationMs = durationMs;
       }
     }
+    if (includeCost) {
+      const costs = estimateSessionCost(session);
+      session.estimatedCost = costs.estimatedCost;
+      session.estimatedCostWithoutCache = costs.estimatedCostWithoutCache;
+      session.estimatedCacheSavings = costs.estimatedCacheSavings;
+      session.estimatedCacheSavingsRatio = costs.estimatedCacheSavingsRatio;
+    }
+
     session.modelList = [...new Set(session.modelList)].sort();
     const outputBase = session.inputTokens + session.cacheReadTokens + session.cacheWriteTokens;
     session.effectiveInputTokens = outputBase;
@@ -177,7 +217,160 @@ function summarizeEventsToSessions(events) {
   return { sessions, attributionCounts };
 }
 
-function buildSummary(rawEvents, sessions) {
+function buildSummary(rawEvents, sessions, options = {}) {
+  const includeCost = options.includeCost !== false;
+  const byProject = new Map();
+  const byModel = new Map();
+  const byTool = new Map();
+  const byCommandCategory = new Map();
+
+  for (const session of sessions) {
+    const projectBucket = byProject.get(session.projectPath) || {
+      projectPath: session.projectPath,
+      eventCount: 0,
+      sessionCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 0,
+      estimatedCost: 0,
+      estimatedCostWithoutCache: 0,
+      estimatedCacheSavings: 0
+    };
+    projectBucket.sessionCount += 1;
+    projectBucket.eventCount += session.eventCount || 0;
+    projectBucket.inputTokens += session.inputTokens || 0;
+    projectBucket.outputTokens += session.outputTokens || 0;
+    projectBucket.cacheWriteTokens += session.cacheWriteTokens || 0;
+    projectBucket.cacheReadTokens += session.cacheReadTokens || 0;
+    projectBucket.totalTokens += session.totalTokens || 0;
+    if (includeCost && Number.isFinite(session.estimatedCost)) {
+      projectBucket.estimatedCost += session.estimatedCost;
+      projectBucket.estimatedCostWithoutCache += session.estimatedCostWithoutCache || 0;
+      projectBucket.estimatedCacheSavings += session.estimatedCacheSavings || 0;
+    }
+    byProject.set(session.projectPath, projectBucket);
+
+    const modelBreakdowns = Array.isArray(session.modelBreakdowns) && session.modelBreakdowns.length > 0
+      ? session.modelBreakdowns
+      : [{
+        model: session.modelList && session.modelList.length > 0 ? session.modelList[0] : "unknown-model",
+        inputTokens: session.inputTokens,
+        outputTokens: session.outputTokens,
+        cacheWriteTokens: session.cacheWriteTokens,
+        cacheReadTokens: session.cacheReadTokens
+      }];
+
+    for (const breakdown of modelBreakdowns) {
+      const modelKey = breakdown.model || "unknown-model";
+      const modelBucket = byModel.get(modelKey) || {
+        model: modelKey,
+        sessions: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 0,
+        estimatedCost: 0,
+        estimatedCostWithoutCache: 0,
+        estimatedCacheSavings: 0
+      };
+      modelBucket.sessions += 1;
+      modelBucket.inputTokens += breakdown.inputTokens ?? 0;
+      modelBucket.outputTokens += breakdown.outputTokens ?? 0;
+      modelBucket.cacheWriteTokens += breakdown.cacheWriteTokens ?? 0;
+      modelBucket.cacheReadTokens += breakdown.cacheReadTokens ?? 0;
+      modelBucket.totalTokens += (breakdown.inputTokens ?? 0) + (breakdown.outputTokens ?? 0) + (breakdown.cacheWriteTokens ?? 0) + (breakdown.cacheReadTokens ?? 0);
+      if (includeCost) {
+        const cost = estimateCostFromTokens(
+          breakdown.model || "unknown-model",
+          breakdown.inputTokens ?? 0,
+          breakdown.outputTokens ?? 0,
+          breakdown.cacheWriteTokens ?? 0,
+          breakdown.cacheReadTokens ?? 0
+        );
+        modelBucket.estimatedCost += cost.estimatedCost;
+        modelBucket.estimatedCostWithoutCache += cost.estimatedCostWithoutCache;
+        modelBucket.estimatedCacheSavings += cost.estimatedCacheSavings;
+      }
+      byModel.set(modelKey, modelBucket);
+    }
+
+    for (const event of session.events || []) {
+      const category = inferCommandCategory(event.signature);
+      if (!category) {
+        continue;
+      }
+      byCommandCategory.set(category, (byCommandCategory.get(category) || 0) + (event.inputTokens || 0) + (session.toolResultTokens || 0));
+    }
+
+    for (const [toolName, count] of Object.entries(session.toolLoopSignals || {})) {
+      if (!toolName) {
+        continue;
+      }
+
+      const byName = byTool.get(toolName) || {
+        toolName,
+        signalCount: 0,
+        weightedTokens: 0,
+        weightedCost: 0,
+        weightedCostWithoutCache: 0
+      };
+      byName.signalCount += count;
+      byName.weightedTokens += count * (session.totalTokens || 0);
+      if (includeCost && Number.isFinite(session.estimatedCost)) {
+        byName.weightedCost += session.estimatedCost * (count || 1);
+        byName.weightedCostWithoutCache += (session.estimatedCostWithoutCache || 0) * (count || 1);
+      }
+      byTool.set(toolName, byName);
+    }
+  }
+
+  const totalTokens = sessions.reduce((sum, session) => sum + (session.totalTokens || 0), 0);
+  const projectTotals = [...byProject.values()].map((project) => {
+    const ratio = project.inputTokens + project.cacheWriteTokens + project.cacheReadTokens > 0
+      ? project.cacheReadTokens / (project.inputTokens + project.cacheWriteTokens + project.cacheReadTokens)
+      : 0;
+    return {
+      ...project,
+      cacheReadRatio: ratio,
+      estimatedCost: includeCost ? project.estimatedCost : undefined,
+      estimatedCostWithoutCache: includeCost ? project.estimatedCostWithoutCache : undefined,
+      estimatedCacheSavings: includeCost ? project.estimatedCacheSavings : undefined,
+      shareByTokens: totalTokens > 0 ? project.totalTokens / totalTokens : 0
+    };
+  });
+
+  const modelTotals = [...byModel.values()].map((model) => ({
+    ...model,
+    estimatedCost: includeCost ? model.estimatedCost : undefined,
+    estimatedCostWithoutCache: includeCost ? model.estimatedCostWithoutCache : undefined,
+    estimatedCacheSavings: includeCost ? model.estimatedCacheSavings : undefined,
+    shareByTokens: totalTokens > 0 ? model.totalTokens / totalTokens : 0
+  }));
+
+  const totalEstimatedCost = sessions.reduce((sum, session) => sum + (Number.isFinite(session.estimatedCost) ? session.estimatedCost : 0), 0);
+  const toolTotals = [...byTool.values()].map((entry) => {
+    const costShare = totalEstimatedCost > 0 ? entry.weightedCost / totalEstimatedCost : 0;
+    return {
+      ...entry,
+      score: entry.weightedTokens,
+      estimatedCost: includeCost ? entry.weightedCost : undefined,
+      estimatedCostWithoutCache: includeCost ? entry.weightedCostWithoutCache : undefined,
+      costShare
+    };
+  }).sort((left, right) => {
+    if (right.estimatedCost !== left.estimatedCost) {
+      return (right.estimatedCost || 0) - (left.estimatedCost || 0);
+    }
+    return right.score - left.score;
+  });
+
+  const commandCategoryTotals = [...byCommandCategory.entries()]
+    .map(([category, score]) => ({ category, score }))
+    .sort((left, right) => right.score - left.score);
+
   return {
     totalEvents: rawEvents.length,
     totalSessions: sessions.length,
@@ -185,8 +378,126 @@ function buildSummary(rawEvents, sessions) {
     totalOutputTokens: sessions.reduce((sum, session) => sum + (session.outputTokens || 0), 0),
     totalCacheWriteTokens: sessions.reduce((sum, session) => sum + (session.cacheWriteTokens || 0), 0),
     totalCacheReadTokens: sessions.reduce((sum, session) => sum + (session.cacheReadTokens || 0), 0),
-    totalToolResultTokens: sessions.reduce((sum, session) => sum + (session.toolResultTokens || 0), 0)
+    totalToolResultTokens: sessions.reduce((sum, session) => sum + (session.toolResultTokens || 0), 0),
+    totalEstimatedCost: includeCost ? sessions.reduce((sum, session) => sum + (Number.isFinite(session.estimatedCost) ? session.estimatedCost : 0), 0) : undefined,
+    totalEstimatedCostWithoutCache: includeCost ? sessions.reduce((sum, session) => sum + (Number.isFinite(session.estimatedCostWithoutCache) ? session.estimatedCostWithoutCache : 0), 0) : undefined,
+    totalEstimatedCacheSavings: includeCost ? sessions.reduce((sum, session) => sum + (Number.isFinite(session.estimatedCacheSavings) ? session.estimatedCacheSavings : 0), 0) : undefined,
+    totalCacheReadRatio: sessions.length > 0
+      ? sessions.reduce((sum, session) => sum + (Number.isFinite(session.cacheReadRatio) ? session.cacheReadRatio : 0), 0) / sessions.length
+      : 0,
+    byProject: projectTotals.sort((left, right) => right.totalTokens - left.totalTokens),
+    byModel: modelTotals.sort((left, right) => right.totalTokens - left.totalTokens),
+    topTools: toolTotals.slice(0, 8),
+    topToolCategories: commandCategoryTotals.slice(0, 8),
+    commandCategories: commandCategoryTotals.slice(0, 8)
   };
+}
+
+function estimateSessionCost(session) {
+  let estimatedCost = 0;
+  let estimatedCostWithoutCache = 0;
+  let estimatedCacheSavings = 0;
+
+  if (!Array.isArray(session.modelBreakdowns) || session.modelBreakdowns.length === 0) {
+    const breakdown = {
+      model: session.modelList && session.modelList.length > 0 ? session.modelList[0] : "unknown-model",
+      inputTokens: session.inputTokens,
+      outputTokens: session.outputTokens,
+      cacheWriteTokens: session.cacheWriteTokens,
+      cacheReadTokens: session.cacheReadTokens
+    };
+    const costEstimate = estimateCostFromTokens(
+      breakdown.model,
+      breakdown.inputTokens,
+      breakdown.outputTokens,
+      breakdown.cacheWriteTokens,
+      breakdown.cacheReadTokens
+    );
+    return {
+      estimatedCost: costEstimate.estimatedCost,
+      estimatedCostWithoutCache: costEstimate.estimatedCostWithoutCache,
+      estimatedCacheSavings: costEstimate.estimatedCacheSavings,
+      estimatedCacheSavingsRatio: costEstimate.estimatedCostWithoutCache > 0
+        ? costEstimate.estimatedCacheSavings / costEstimate.estimatedCostWithoutCache
+        : 0
+    };
+  }
+
+  for (const breakdown of session.modelBreakdowns) {
+    const inputTokens = Number.isFinite(breakdown.inputTokens) ? breakdown.inputTokens : 0;
+    const outputTokens = Number.isFinite(breakdown.outputTokens) ? breakdown.outputTokens : 0;
+    const cacheWriteTokens = Number.isFinite(breakdown.cacheWriteTokens) ? breakdown.cacheWriteTokens : 0;
+    const cacheReadTokens = Number.isFinite(breakdown.cacheReadTokens) ? breakdown.cacheReadTokens : 0;
+    const costEstimate = estimateCostFromTokens(
+      breakdown.model || "unknown-model",
+      inputTokens,
+      outputTokens,
+      cacheWriteTokens,
+      cacheReadTokens
+    );
+    estimatedCost += costEstimate.estimatedCost;
+    estimatedCostWithoutCache += costEstimate.estimatedCostWithoutCache;
+    estimatedCacheSavings += costEstimate.estimatedCacheSavings;
+  }
+
+  return {
+    estimatedCost,
+    estimatedCostWithoutCache,
+    estimatedCacheSavings,
+    estimatedCacheSavingsRatio: estimatedCostWithoutCache > 0
+      ? estimatedCacheSavings / estimatedCostWithoutCache
+      : 0
+  };
+}
+
+function estimateCostFromTokens(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens) {
+  const rate = getModelRate(model);
+  const inputCost = (inputTokens + cacheWriteTokens) * rate.input;
+  const inputCostNoCache = (inputTokens + cacheWriteTokens + cacheReadTokens) * rate.input;
+  const outputCost = outputTokens * rate.output;
+
+  return {
+    estimatedCost: roundCurrency(inputCost + outputCost),
+    estimatedCostWithoutCache: roundCurrency(inputCostNoCache + outputCost),
+    estimatedCacheSavings: roundCurrency(inputCostNoCache - inputCost),
+    model
+  };
+}
+
+function getModelRate(model) {
+  const normalized = String(model || "unknown-model").toLowerCase();
+  if (MODEL_RATES[normalized]) {
+    return MODEL_RATES[normalized];
+  }
+
+  for (const [candidate, rate] of Object.entries(MODEL_RATES)) {
+    if (normalized.startsWith(`${candidate}-`) || normalized.startsWith(`${candidate}.`) || normalized.startsWith(`${candidate}:`) || normalized.startsWith(`${candidate}@`)) {
+      return rate;
+    }
+  }
+
+  return DEFAULT_COST_RATE;
+}
+
+function inferCommandCategory(signature) {
+  if (!signature || typeof signature !== "string") {
+    return undefined;
+  }
+
+  const head = signature.toLowerCase().trim().split(/\s+/)[0] || "";
+  if (head === "git") {
+    return "version-control";
+  }
+  if (["npm", "pnpm", "yarn", "bun", "npx", "node", "python", "go", "pytest"].includes(head)) {
+    return "runtime-orchestrator";
+  }
+  if (head === "curl") {
+    return "network";
+  }
+  if (["ls", "find", "cat", "grep", "sed", "awk"].includes(head)) {
+    return "shell";
+  }
+  return "other";
 }
 
 function detectLongSessions(sessions) {
@@ -609,6 +920,119 @@ function detectToolResultBloat(sessions) {
   ];
 }
 
+function detectCostInefficiencyWithoutCache(sessions) {
+  const affected = [];
+  for (const session of sessions) {
+    if (!Number.isFinite(session.estimatedCost) || !Number.isFinite(session.estimatedCacheSavings)) {
+      continue;
+    }
+    if (session.estimatedCost <= 0 || session.estimatedCacheSavings <= 0) {
+      continue;
+    }
+    if ((session.cacheReadRatio ?? 0) > 0.2) {
+      continue;
+    }
+    if (session.totalTokens < 2000) {
+      continue;
+    }
+    if (session.estimatedCacheSavingsRatio === undefined || session.estimatedCacheSavingsRatio < 0.05) {
+      continue;
+    }
+    affected.push(session.sessionId);
+  }
+
+  if (affected.length === 0) {
+    return [];
+  }
+
+  const unique = [...new Set(affected)];
+  const scoreContribution = scoreForDriver({
+    baseScore: 12,
+    affectedCount: unique.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: 0.55,
+    affectedTokens: unique.reduce((sum, sessionId) => sum + sessionTokenTotal(sessions, sessionId), 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
+  });
+
+  return [
+    {
+      id: "token-blame.cost-inefficiency-without-cache",
+      title: "Large cost impact from low cache reuse",
+      severity: "medium",
+      scoreContribution,
+      sampleSize: unique.length,
+      affectedSessions: unique,
+      confidence: 0.74,
+      why: "Estimated cache savings indicate meaningful avoidable cost if cache-read reuse improved.",
+      likelyFix: "Stabilize prompts and shared context to raise cache hit usage.",
+      evidenceSummary: `${unique.length} session(s) with stronger savings potential without cache usage.`
+    }
+  ];
+}
+
+function detectNoisyToolLoop(sessions) {
+  const affected = [];
+  for (const session of sessions) {
+    const eventTools = session.events || [];
+    if (eventTools.length < 4) {
+      continue;
+    }
+
+    const toolSignatureCount = new Map();
+    for (const event of eventTools) {
+      if (typeof event.toolSignature === "string") {
+        toolSignatureCount.set(event.toolSignature, (toolSignatureCount.get(event.toolSignature) || 0) + 1);
+      }
+    }
+
+    const highestToolCount = [...toolSignatureCount.values()].reduce((maxValue, value) => Math.max(maxValue, value), 0);
+    if (highestToolCount < 3) {
+      continue;
+    }
+
+    if (!Number.isFinite(session.toolResultTokens) || session.toolResultTokens <= 0) {
+      continue;
+    }
+
+    const ratio = session.toolResultTokens / Math.max(1, session.inputTokens + 1);
+    if (ratio < 0.2) {
+      continue;
+    }
+
+    affected.push(session.sessionId);
+  }
+
+  if (affected.length === 0) {
+    return [];
+  }
+
+  const unique = [...new Set(affected)];
+  const scoreContribution = scoreForDriver({
+    baseScore: 11,
+    affectedCount: unique.length,
+    totalSessions: sessions.length,
+    distanceToThreshold: 0.5,
+    affectedTokens: unique.reduce((sum, sessionId) => sum + sessionTokenTotal(sessions, sessionId), 0),
+    totalTokens: sessions.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
+  });
+
+  return [
+    {
+      id: "token-blame.noisy-tool-loop",
+      title: "Noisy repeated tool loops",
+      severity: "low",
+      scoreContribution,
+      sampleSize: unique.length,
+      affectedSessions: unique,
+      confidence: 0.68,
+      why: "Multiple repeated tool signatures and high tool-result footprint suggest looped tool output patterns.",
+      likelyFix: "Debounce tool polling and shorten repeated context payloads.",
+      evidenceSummary: `${unique.length} session(s) include repeated tool signatures with notable tool-result volume.`
+    }
+  ];
+}
+
 function detectShortFragmentedSessions(sessions) {
   const byProjectModel = new Map();
   for (const session of sessions) {
@@ -817,6 +1241,13 @@ function pickSeverity(count, base) {
     return "medium";
   }
   return "low";
+}
+
+function roundCurrency(value) {
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return Number(value.toFixed(8));
 }
 
 function quantile(values, pct) {

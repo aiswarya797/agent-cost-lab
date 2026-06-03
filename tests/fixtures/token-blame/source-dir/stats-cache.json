@@ -1,0 +1,1 @@
+{"type":"session","data":[{"message":{"session":"stats-1","project":"stats-project","model":"claude-3-5-sonnet-20240620","prompt":"stats-session","usage":{"input_tokens":30,"output_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":1}},"timestamp":"2026-03-01T11:00:00.000Z"}]}
